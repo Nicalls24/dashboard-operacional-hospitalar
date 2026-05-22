@@ -146,7 +146,7 @@ export async function GET() {
     console.error("[/api/dados] Error:", err);
     // Always return something so the dashboard never shows a blank screen
     return NextResponse.json(
-      { ok: false, erro: String(err), ...mockData() },
+      { ok: false, erro: String(err), ...(() => { const d = mockData(); delete (d as any).ok; return d; })() },
       { status: 200 }
     );
   }
