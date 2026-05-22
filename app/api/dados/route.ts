@@ -1,199 +1,195 @@
-// app/api/dados/route.ts
-// ─────────────────────────────────────────────────────────────────────────────
-// HOW TO USE:
-//   1. Paste this file at:  app/api/dados/route.ts
-//   2. Set your OneDrive share link in .env.local:
-//        ONEDRIVE_EXCEL_URL="https://onedrive.live.com/download?..."
-//      (use the direct-download link — append &download=1 if needed)
-//   3. Run:  npm run dev
-//   4. Visit:  http://localhost:3000/api/dados
-// ─────────────────────────────────────────────────────────────────────────────
-
-import * as XLSX from "xlsx";
 import { NextResponse } from "next/server";
+import * as XLSX from "xlsx";
 
-// ── Helpers ────────────────────────────────────────────────────────────────
+// ── In-memory cache (persists while Vercel function is warm) ──────────────────
+let cachedData: any = null;
+let cachedAt: string = "";
 
-function toMinutes(str: string): number {
-  if (!str) return 0;
-  const parts = String(str).split(":").map(Number);
-  if (parts.length === 2) return parts[0] * 60 + parts[1];
-  if (parts.length === 3) return parts[0] * 60 + parts[1];
-  return Number(str) || 0;
-}
-
-function classifyStatus(mediaMinutes: number): string {
-  if (mediaMinutes > 60) return "Crítico";
-  if (mediaMinutes > 30) return "Grave";
-  if (mediaMinutes > 15) return "Atenção";
-  return "Normal";
-}
-
-// ── GET handler ────────────────────────────────────────────────────────────
-
-export async function GET() {
+// ── POST — recebe Excel em base64 do Power Automate ───────────────────────────
+export async function POST(request: Request) {
   try {
-    // 1. Resolve URL ────────────────────────────────────────────────────────
-    const excelUrl = process.env.ONEDRIVE_EXCEL_URL;
+    const body = await request.json();
+    const { excel, filename } = body;
 
-    if (!excelUrl) {
-      // Return mock data so the dashboard still works without the env var
-      return NextResponse.json(mockData(), { status: 200 });
+    if (!excel) {
+      return NextResponse.json({ ok: false, erro: "Campo 'excel' não enviado" }, { status: 400 });
     }
 
-    // 2. Download the file ──────────────────────────────────────────────────
-    const response = await fetch(excelUrl, {
-      headers: { "User-Agent": "Mozilla/5.0" },
-      // Next.js 15+: revalidate every 30 seconds
-      next: { revalidate: 30 },
-    });
-
-    if (!response.ok) {
-      console.error("OneDrive fetch failed:", response.status, response.statusText);
-      return NextResponse.json(mockData(), { status: 200 });
-    }
-
-    const buffer = await response.arrayBuffer();
-
-    // 3. Parse workbook ─────────────────────────────────────────────────────
+    const buffer = Buffer.from(excel, "base64");
     const workbook = XLSX.read(buffer, { type: "buffer" });
 
-    // Adjust sheet name if yours is different
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
+    const parsed = parseWorkbook(workbook, filename || "");
+    cachedData = parsed;
+    cachedAt = new Date().toISOString();
 
-    // Convert to JSON (header row = row 1)
-    const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+    console.log(`[/api/dados POST] Dados atualizados: ${parsed.resumo.totalRegistros} registros`);
+    return NextResponse.json({ ok: true, registros: parsed.resumo.totalRegistros, atualizadoEm: cachedAt });
 
-    if (!rows.length) {
-      return NextResponse.json(mockData(), { status: 200 });
-    }
-
-    // 4. Transform rows ─────────────────────────────────────────────────────
-    // Adapt column names below to match your actual Excel headers
-    const hospitais = rows.map((row) => {
-      const mediaStr = String(row["Média Espera"] || row["media_espera"] || row["MediaEspera"] || "00:00");
-      const mediaMin = toMinutes(mediaStr);
-
-      return {
-        uf:         String(row["UF"] || row["Estado"] || ""),
-        unidade:    String(row["Unidade"] || row["Hospital"] || row["Nome"] || ""),
-        esp:        String(row["Especialidade"] || ""),
-        aguardando: Number(row["Aguardando"] || row["Fila"] || 0),
-        atendimento:Number(row["Em Atendimento"] || row["Atendimento"] || 0),
-        tempoMax:   String(row["Tempo Máximo"] || row["TempoMaximo"] || "00:00"),
-        mediaEspera:mediaStr,
-        status:     classifyStatus(mediaMin),
-      };
-    });
-
-    // 5. Compute KPIs ───────────────────────────────────────────────────────
-    const totalAguardando  = hospitais.reduce((s, h) => s + h.aguardando, 0);
-    const totalAtendimento = hospitais.reduce((s, h) => s + h.atendimento, 0);
-    const criticos         = hospitais.filter((h) => h.status === "Crítico").length;
-    const slaOk            = hospitais.filter((h) => toMinutes(h.mediaEspera) < 30).length;
-    const slaPct           = hospitais.length
-      ? ((slaOk / hospitais.length) * 100).toFixed(1) + "%"
-      : "—";
-
-    const sorted = [...hospitais].sort(
-      (a, b) => toMinutes(b.tempoMax) - toMinutes(a.tempoMax)
-    );
-
-    const maiorEspera = sorted[0] ?? null;
-
-    // Distribuição por faixa de espera
-    const dist = [
-      { name: "< 15m",     value: 0, color: "#22c55e" },
-      { name: "15m - 30m", value: 0, color: "#06b6d4" },
-      { name: "30m - 45m", value: 0, color: "#3b82f6" },
-      { name: "45m - 1h",  value: 0, color: "#facc15" },
-      { name: "1h - 1h30", value: 0, color: "#fb923c" },
-      { name: "> 1h30",    value: 0, color: "#ef4444" },
-    ];
-    hospitais.forEach((h) => {
-      const m = toMinutes(h.mediaEspera);
-      if (m < 15)       dist[0].value++;
-      else if (m < 30)  dist[1].value++;
-      else if (m < 45)  dist[2].value++;
-      else if (m < 60)  dist[3].value++;
-      else if (m < 90)  dist[4].value++;
-      else              dist[5].value++;
-    });
-
-    // 6. Return JSON ────────────────────────────────────────────────────────
-    return NextResponse.json({
-      ok: true,
-      atualizadoEm: new Date().toISOString(),
-      kpis: {
-        totalAguardando,
-        totalAtendimento,
-        hospitaisCriticos: criticos,
-        slaMenor30min: slaPct,
-        maiorEspera: maiorEspera
-          ? { nome: maiorEspera.unidade, uf: maiorEspera.uf, tempo: maiorEspera.tempoMax }
-          : null,
-      },
-      distribuicao: dist,
-      top10: sorted.slice(0, 10).map((h) => ({
-        nome:   `${h.unidade} - ${h.uf}`,
-        tempo:  h.tempoMax,
-        status: h.status,
-      })),
-      hospitais: sorted,
-    });
   } catch (err) {
-    console.error("[/api/dados] Error:", err);
-    // Always return something so the dashboard never shows a blank screen
-    return NextResponse.json(
-      { ok: false, erro: String(err), ...(() => { const d = mockData(); delete (d as any).ok; return d; })() },
-      { status: 200 }
-    );
+    console.error("[/api/dados POST] Erro:", err);
+    return NextResponse.json({ ok: false, erro: String(err) }, { status: 500 });
   }
 }
 
-// ── Mock data (returned when no Excel URL is configured) ───────────────────
+// ── GET — retorna dados em cache ou mock ──────────────────────────────────────
+export async function GET() {
+  try {
+    if (cachedData) {
+      return NextResponse.json({ ...cachedData, fonte: "cache", cachedAt });
+    }
 
+    // Tenta buscar do OneDrive se configurado
+    const url = process.env.ONEDRIVE_EXCEL_URL;
+    if (url) {
+      const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) });
+      if (res.ok) {
+        const buffer = Buffer.from(await res.arrayBuffer());
+        const workbook = XLSX.read(buffer, { type: "buffer" });
+        const parsed = parseWorkbook(workbook, "onedrive");
+        cachedData = parsed;
+        cachedAt = new Date().toISOString();
+        return NextResponse.json({ ...parsed, fonte: "onedrive", cachedAt });
+      }
+    }
+
+    // Fallback: mock data
+    return NextResponse.json({ ...mockData(), fonte: "mock" });
+
+  } catch (err) {
+    console.error("[/api/dados GET] Erro:", err);
+    return NextResponse.json({ ...mockData(), fonte: "mock" });
+  }
+}
+
+// ── Parser de workbook ────────────────────────────────────────────────────────
+function parseWorkbook(workbook: XLSX.WorkBook, filename: string) {
+  // Prioriza aba GERAL, senão usa a última aba com dados
+  let sheetName = workbook.SheetNames.find(n => n.toUpperCase().includes("GERAL"))
+    || workbook.SheetNames[workbook.SheetNames.length - 1];
+
+  const sheet = workbook.Sheets[sheetName];
+  const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+
+  // Encontra linha de cabeçalho (UF / Unidade)
+  let headerIdx = -1;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    if (String(r[0]).trim().toUpperCase() === "UF" || String(r[1]).trim().toUpperCase() === "UNIDADE") {
+      headerIdx = i;
+      break;
+    }
+  }
+
+  // Extrai metadados (primeiras linhas)
+  let atualizacaoBI = "";
+  for (let i = 0; i < (headerIdx > 0 ? headerIdx : 5); i++) {
+    const cell = String(rows[i]?.[0] || "");
+    if (cell.includes("Atualização BI:")) atualizacaoBI = cell.replace("Atualização BI:", "").trim();
+  }
+
+  if (headerIdx === -1) return { ...mockData(), aviso: "Cabeçalho não encontrado" };
+
+  const hospitais: any[] = [];
+  for (let i = headerIdx + 1; i < rows.length; i++) {
+    const r = rows[i];
+    const uf = String(r[0] || "").trim();
+    const unidade = String(r[1] || "").trim();
+    if (!uf && !unidade) continue;
+    if (uf.toUpperCase() === "TOTAL") break;
+
+    const tempoStr = String(r[5] || "").trim();
+    const tempoMin = toMinutes(tempoStr);
+
+    hospitais.push({
+      uf,
+      unidade,
+      especialidade:        String(r[2] || "").trim(),
+      pacientesAguardando:  Number(r[3]) || 0,
+      pacientesAtendimento: Number(r[4]) || 0,
+      tempoMaximo:          tempoStr,
+      tempoMaximoMin:       tempoMin,
+      status:               classifyStatus(tempoMin),
+      motivo:               String(r[6] || "").trim(),
+      observacoes:          String(r[7] || "").trim(),
+    });
+  }
+
+  const sorted = [...hospitais].sort((a, b) => b.tempoMaximoMin - a.tempoMaximoMin);
+  const temposValidos = hospitais.filter(h => h.tempoMaximoMin > 0).map(h => h.tempoMaximoMin);
+  const tempoMedio = temposValidos.length
+    ? Math.round(temposValidos.reduce((a, b) => a + b, 0) / temposValidos.length) : 0;
+
+  return {
+    ok: true,
+    atualizadoEm: atualizacaoBI || new Date().toISOString(),
+    arquivo: filename,
+    aba: sheetName,
+    resumo: {
+      totalRegistros:      hospitais.length,
+      totalAguardando:     hospitais.reduce((s, h) => s + h.pacientesAguardando, 0),
+      totalAtendimento:    hospitais.reduce((s, h) => s + h.pacientesAtendimento, 0),
+      tempoMedioFormatado: fromMinutes(tempoMedio),
+      maiorEspera:         sorted[0]?.tempoMaximo || "00:00",
+      maiorEsperaUnidade:  sorted[0]?.unidade || "",
+      maiorEsperaUF:       sorted[0]?.uf || "",
+      criticos:            hospitais.filter(h => h.status === "Crítico").length,
+      graves:              hospitais.filter(h => h.status === "Grave").length,
+      atencao:             hospitais.filter(h => h.status === "Atenção").length,
+      normais:             hospitais.filter(h => h.status === "Normal").length,
+    },
+    top10:    sorted.slice(0, 10),
+    hospitais: sorted,
+  };
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function toMinutes(t: string): number {
+  if (!t || t === "*") return 0;
+  const mMin = t.match(/^(\d+)\s*MIN$/i);
+  if (mMin) return parseInt(mMin[1]);
+  const mHora = t.match(/^(\d+):(\d{2})$/);
+  if (mHora) return parseInt(mHora[1]) * 60 + parseInt(mHora[2]);
+  return 0;
+}
+function fromMinutes(m: number): string {
+  if (!m) return "00:00";
+  return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+}
+function classifyStatus(min: number): string {
+  if (min >= 90) return "Crítico";
+  if (min >= 30) return "Grave";
+  if (min >= 15) return "Atenção";
+  return "Normal";
+}
+
+// ── Mock data ─────────────────────────────────────────────────────────────────
 function mockData() {
+  const hospitais = [
+    { uf:"PI", unidade:"Hospital Rio Poty",         especialidade:"Clínica Médica", pacientesAguardando:3,  pacientesAtendimento:1, tempoMaximo:"4:53", tempoMaximoMin:293, status:"Crítico", motivo:"", observacoes:"" },
+    { uf:"BA", unidade:"Hospital Teresa de Lisieux",especialidade:"Obstetrícia",    pacientesAguardando:6,  pacientesAtendimento:0, tempoMaximo:"2:38", tempoMaximoMin:158, status:"Crítico", motivo:"", observacoes:"" },
+    { uf:"PE", unidade:"PA Derby",                  especialidade:"Clínica Médica", pacientesAguardando:14, pacientesAtendimento:7, tempoMaximo:"2:37", tempoMaximoMin:157, status:"Crítico", motivo:"", observacoes:"" },
+    { uf:"SP", unidade:"Hosp Notrecare ABC",         especialidade:"Pediatria",      pacientesAguardando:11, pacientesAtendimento:6, tempoMaximo:"2:16", tempoMaximoMin:136, status:"Crítico", motivo:"", observacoes:"" },
+    { uf:"SP", unidade:"Hospital Salvalus",          especialidade:"Clínica Médica", pacientesAguardando:8,  pacientesAtendimento:6, tempoMaximo:"2:09", tempoMaximoMin:129, status:"Crítico", motivo:"", observacoes:"" },
+    { uf:"SP", unidade:"PA Barueri",                 especialidade:"Pediatria",      pacientesAguardando:5,  pacientesAtendimento:3, tempoMaximo:"1:31", tempoMaximoMin:91,  status:"Crítico", motivo:"", observacoes:"" },
+    { uf:"CE", unidade:"Hospital Ana Lima",          especialidade:"Clínica Médica", pacientesAguardando:7,  pacientesAtendimento:4, tempoMaximo:"1:29", tempoMaximoMin:89,  status:"Grave",  motivo:"", observacoes:"" },
+    { uf:"CE", unidade:"Hosp. Eugenia Pinheiro",     especialidade:"Ortopedia",      pacientesAguardando:4,  pacientesAtendimento:2, tempoMaximo:"1:25", tempoMaximoMin:85,  status:"Grave",  motivo:"", observacoes:"" },
+    { uf:"GO", unidade:"Hospital Encore Goiás",      especialidade:"Clínica Médica", pacientesAguardando:2,  pacientesAtendimento:5, tempoMaximo:"0:22", tempoMaximoMin:22,  status:"Atenção",motivo:"", observacoes:"" },
+    { uf:"MG", unidade:"Hosp. Hapvida BH",           especialidade:"Ortopedia",      pacientesAguardando:3,  pacientesAtendimento:4, tempoMaximo:"0:18", tempoMaximoMin:18,  status:"Normal", motivo:"", observacoes:"" },
+  ];
   return {
     ok: true,
     atualizadoEm: new Date().toISOString(),
-    kpis: {
-      totalAguardando:   327,
-      totalAtendimento:  184,
-      hospitaisCriticos: 14,
-      slaMenor30min:     "68.4%",
-      maiorEspera: { nome: "Hospital Rio Poty", uf: "PI", tempo: "4:53" },
+    resumo: {
+      totalRegistros: hospitais.length,
+      totalAguardando: hospitais.reduce((s,h)=>s+h.pacientesAguardando,0),
+      totalAtendimento: hospitais.reduce((s,h)=>s+h.pacientesAtendimento,0),
+      tempoMedioFormatado: "00:28",
+      maiorEspera: "4:53",
+      maiorEsperaUnidade: "Hospital Rio Poty",
+      maiorEsperaUF: "PI",
+      criticos: 6, graves: 2, atencao: 1, normais: 1,
     },
-    distribuicao: [
-      { name: "< 15m",     value: 133, color: "#22c55e" },
-      { name: "15m - 30m", value: 89,  color: "#06b6d4" },
-      { name: "30m - 45m", value: 41,  color: "#3b82f6" },
-      { name: "45m - 1h",  value: 32,  color: "#facc15" },
-      { name: "1h - 1h30", value: 18,  color: "#fb923c" },
-      { name: "> 1h30",    value: 14,  color: "#ef4444" },
-    ],
-    top10: [
-      { nome: "Hospital Rio Poty - PI",              tempo: "4:53", status: "Crítico" },
-      { nome: "Hospital Teresa de Lisieux - BA",     tempo: "2:38", status: "Crítico" },
-      { nome: "PA Derby - PE",                       tempo: "2:37", status: "Crítico" },
-      { nome: "Hosp Notrecare ABC - SP",             tempo: "2:16", status: "Crítico" },
-      { nome: "Hospital Salvalus - SP",              tempo: "2:09", status: "Crítico" },
-      { nome: "PA Barueri - SP",                     tempo: "1:31", status: "Grave"   },
-      { nome: "Hospital Ana Lima - CE",              tempo: "1:29", status: "Grave"   },
-      { nome: "Hosp. Eugenia Pinheiro - CE",         tempo: "1:25", status: "Grave"   },
-      { nome: "Hosp Keila Ferreira Guarulhos - SP",  tempo: "1:25", status: "Grave"   },
-      { nome: "CC Cotia 1 - SP",                     tempo: "1:23", status: "Grave"   },
-    ],
-    hospitais: [
-      { uf: "PI", unidade: "Hospital Rio Poty",            esp: "Clínica Médica", aguardando: 3,  atendimento: 1, tempoMax: "4:53", mediaEspera: "01:15", status: "Crítico"  },
-      { uf: "BA", unidade: "Hospital Teresa de Lisieux",   esp: "Obstetrícia",    aguardando: 6,  atendimento: 0, tempoMax: "2:38", mediaEspera: "00:58", status: "Crítico"  },
-      { uf: "PE", unidade: "PA Derby",                     esp: "Clínica Médica", aguardando: 14, atendimento: 7, tempoMax: "2:37", mediaEspera: "00:47", status: "Grave"    },
-      { uf: "SP", unidade: "Hosp Notrecare ABC",           esp: "Pediatria",      aguardando: 11, atendimento: 6, tempoMax: "2:16", mediaEspera: "00:42", status: "Grave"    },
-      { uf: "SP", unidade: "Hospital Salvalus",            esp: "Clínica Médica", aguardando: 8,  atendimento: 6, tempoMax: "2:09", mediaEspera: "00:40", status: "Grave"    },
-      { uf: "SP", unidade: "PA Barueri",                   esp: "Pediatria",      aguardando: 5,  atendimento: 3, tempoMax: "1:31", mediaEspera: "00:31", status: "Atenção"  },
-      { uf: "CE", unidade: "Hospital Ana Lima",            esp: "Clínica Médica", aguardando: 7,  atendimento: 4, tempoMax: "1:29", mediaEspera: "00:29", status: "Atenção"  },
-      { uf: "CE", unidade: "Hosp. Eugenia Pinheiro",       esp: "Ortopedia",      aguardando: 4,  atendimento: 2, tempoMax: "1:25", mediaEspera: "00:27", status: "Atenção"  },
-    ],
+    top10: hospitais.slice(0, 10),
+    hospitais,
   };
 }
