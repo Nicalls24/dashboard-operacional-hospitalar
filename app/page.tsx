@@ -13,6 +13,28 @@ import {
   Radar, PolarGrid, PolarAngleAxis, CartesianGrid,
 } from "recharts";
 
+// ─── TYPES ────────────────────────────────────────────────────────────────────
+interface DashData {
+  resumo: {
+    totalRegistros: number;
+    totalAguardando: number;
+    totalAtendimento: number;
+    tempoMedioFormatado: string;
+    maiorEspera: string;
+    maiorEsperaUnidade: string;
+    maiorEsperaUF: string;
+    criticos: number;
+    graves: number;
+    atencao: number;
+    normais: number;
+  };
+  top10: any[];
+  hospitais: any[];
+  atualizadoEm: string;
+  turno?: string;
+  data?: string;
+}
+
 // ─── DATA ────────────────────────────────────────────────────────────────────
 const sparkData = [{v:4},{v:7},{v:5},{v:8},{v:4},{v:9},{v:6},{v:8},{v:5},{v:10}];
 const lineData = [
@@ -20,7 +42,7 @@ const lineData = [
   {t:"23:00",v:33},{t:"01:00",v:22},{t:"03:00",v:18},{t:"05:00",v:20},
   {t:"07:00",v:26},{t:"09:00",v:31},{t:"11:00",v:19},{t:"13:00",v:24},{t:"15:00",v:34},
 ];
-const donutData = [
+const donutDataMock = [
   {name:"< 15m",    value:133,pct:"40.7%",color:"#22c55e"},
   {name:"15m-30m",  value:89, pct:"27.2%",color:"#06b6d4"},
   {name:"30m-45m",  value:41, pct:"12.5%",color:"#3b82f6"},
@@ -28,7 +50,7 @@ const donutData = [
   {name:"1h-1h30",  value:18, pct:"5.5%", color:"#fb923c"},
   {name:"> 1h30",   value:14, pct:"4.3%", color:"#ef4444"},
 ];
-const top10 = [
+const top10Mock = [
   ["Hospital Rio Poty - PI","4:53","#ef4444"],
   ["Hospital Teresa de Lisieux - BA","2:38","#ef4444"],
   ["PA Derby - PE","2:37","#ef4444"],
@@ -49,7 +71,7 @@ const specialties = [
   ["Traumatologia","00:21","#22c55e",55],
   ["Oftalmologia","00:18","#a78bfa",44],
 ];
-const tableData = [
+const tableDataMock = [
   {uf:"PI",unidade:"Hospital Rio Poty",         esp:"Clínica Médica",agu:3, ate:1,max:"4:53",med:"01:15",status:"Crítico"},
   {uf:"BA",unidade:"Hospital Teresa de Lisieux",esp:"Obstetrícia",   agu:6, ate:0,max:"2:38",med:"00:58",status:"Crítico"},
   {uf:"PE",unidade:"PA Derby",                  esp:"Clínica Médica",agu:14,ate:7,max:"2:37",med:"00:47",status:"Grave"},
@@ -67,10 +89,10 @@ const rankingData = [
   {pos:3, nome:"PA São Paulo Centro - SP",       score:91,med:"00:17",agu:4, status:"Normal", trend:"up"},
   {pos:4, nome:"Hapvida Fortaleza - CE",         score:87,med:"00:19",agu:5, status:"Normal", trend:"same"},
   {pos:5, nome:"Clínica Hapvida Recife - PE",    score:83,med:"00:21",agu:6, status:"Normal", trend:"up"},
-  {pos:6, nome:"PA Barueri - SP",               score:72,med:"00:31",agu:5, status:"Atenção",trend:"down"},
+  {pos:6, nome:"PA Barueri - SP",                score:72,med:"00:31",agu:5, status:"Atenção",trend:"down"},
   {pos:7, nome:"Hospital Ana Lima - CE",         score:68,med:"00:29",agu:7, status:"Atenção",trend:"same"},
   {pos:8, nome:"Hosp. Eugenia Pinheiro - CE",    score:61,med:"00:27",agu:4, status:"Atenção",trend:"down"},
-  {pos:9, nome:"PA Derby - PE",                 score:44,med:"00:47",agu:14,status:"Grave",  trend:"down"},
+  {pos:9, nome:"PA Derby - PE",                  score:44,med:"00:47",agu:14,status:"Grave",  trend:"down"},
   {pos:10,nome:"Hospital Salvalus - SP",         score:41,med:"00:40",agu:8, status:"Grave",  trend:"down"},
 ];
 const ufData = [
@@ -184,16 +206,41 @@ function BrazilMap() {
 }
 
 // ─── VIEWS ────────────────────────────────────────────────────────────────────
-function VGeral({ac,sac}:any) {
+function VGeral({ac,sac,dash}:any) {
+  const r = dash?.resumo;
+  const tot = r?.totalRegistros || 1;
+
+  // Dados reais do Firestore com fallback para mock
+  const t10 = dash?.top10?.slice(0,10).map((h:any) => [
+    `${h.unidade} - ${h.uf}`,
+    h.tempoMaximo,
+    h.status==="Crítico"?"#ef4444":h.status==="Grave"?"#fb923c":"#facc15"
+  ]) || top10Mock;
+
+  const tbl = dash?.hospitais?.map((h:any) => ({
+    uf: h.uf, unidade: h.unidade, esp: h.especialidade,
+    agu: h.pacientesAguardando, ate: h.pacientesAtendimento,
+    max: h.tempoMaximo, med: "-", status: h.status,
+  })) || tableDataMock;
+
+  const donut = r ? [
+    {name:"Normal",  value:r.normais,  pct:`${Math.round(r.normais/tot*100)}%`,  color:"#22c55e"},
+    {name:"Atenção", value:r.atencao,  pct:`${Math.round(r.atencao/tot*100)}%`,  color:"#06b6d4"},
+    {name:"Grave",   value:r.graves,   pct:`${Math.round(r.graves/tot*100)}%`,   color:"#fb923c"},
+    {name:"Crítico", value:r.criticos, pct:`${Math.round(r.criticos/tot*100)}%`, color:"#ef4444"},
+  ] : donutDataMock;
+
+  const totalDonut = r?.totalRegistros || 327;
+
   return (
     <>
       <div className="grid grid-cols-6 gap-3 mb-3">
-        <KPI title="Pacientes Aguardando" value="327"   trend="12%"      sub="vs último período" color="#8B5CF6" icon={<Hospital size={20}/>}/>
-        <KPI title="Em Atendimento"       value="184"   trend="8%"       sub="vs último período" color="#3B82F6" icon={<Activity size={20}/>}/>
-        <KPI title="Tempo Médio"          value="00:28" trend="5 min"    sub="vs último período" color="#F59E0B" icon={<Clock3 size={20}/>}/>
-        <KPI title="Maior Espera"         value="04:53" trend="Rio Poty" sub="PI"                color="#EF4444" icon={<ShieldAlert size={20}/>}/>
-        <KPI title="Hospitais Críticos"   value="14"    trend="3 novos"  sub="críticos"          color="#EF4444" icon={<Bell size={20}/>}/>
-        <KPI title="SLA < 30 min"         value="68,4%" trend="6,2%"     sub="vs último período" color="#22C55E" icon={<ShieldAlert size={20}/>}/>
+        <KPI title="Pacientes Aguardando" value={String(r?.totalAguardando ?? 327)}   trend="12%"      sub="vs último período" color="#8B5CF6" icon={<Hospital size={20}/>}/>
+        <KPI title="Em Atendimento"       value={String(r?.totalAtendimento ?? 184)}  trend="8%"       sub="vs último período" color="#3B82F6" icon={<Activity size={20}/>}/>
+        <KPI title="Tempo Médio"          value={r?.tempoMedioFormatado ?? "00:28"}   trend="5 min"    sub="vs último período" color="#F59E0B" icon={<Clock3 size={20}/>}/>
+        <KPI title="Maior Espera"         value={r?.maiorEspera ?? "04:53"}           trend={r?.maiorEsperaUnidade ?? "Rio Poty"} sub={r?.maiorEsperaUF ?? "PI"} color="#EF4444" icon={<ShieldAlert size={20}/>}/>
+        <KPI title="Hospitais Críticos"   value={String(r?.criticos ?? 14)}           trend="3 novos"  sub="críticos"          color="#EF4444" icon={<Bell size={20}/>}/>
+        <KPI title="SLA < 30 min"         value="68,4%"                               trend="6,2%"     sub="vs último período" color="#22C55E" icon={<ShieldAlert size={20}/>}/>
       </div>
       <div className="grid grid-cols-12 gap-3 mb-3">
         <Card className="col-span-4 relative overflow-hidden">
@@ -216,13 +263,13 @@ function VGeral({ac,sac}:any) {
         <Card className="col-span-4">
           <h2 className="text-[16px] font-black mb-3">Top 10 Maiores Tempos de Espera</h2>
           <div className="space-y-2">
-            {top10.map(([n,t,c],i)=>(
+            {t10.map(([n,t,c]:any,i:number)=>(
               <div key={i} className="flex items-center justify-between rounded-xl bg-white/[0.03] px-3 py-2 border border-white/[0.03]">
                 <div className="flex items-center gap-3">
                   <div className="w-7 h-7 rounded-lg bg-white/[0.05] flex items-center justify-center text-[12px] text-slate-400">{i+1}</div>
-                  <span className="text-[13px] text-slate-200">{n as string}</span>
+                  <span className="text-[13px] text-slate-200">{n}</span>
                 </div>
-                <span className="text-[20px] font-black" style={{color:c as string}}>{t as string}</span>
+                <span className="text-[20px] font-black" style={{color:c}}>{t}</span>
               </div>
             ))}
           </div>
@@ -232,15 +279,15 @@ function VGeral({ac,sac}:any) {
           <div className="flex items-center h-[300px] gap-2">
             <div className="w-[55%] h-full relative">
               <ResponsiveContainer width="100%" height="100%">
-                <PieChart><Pie data={donutData} dataKey="value" innerRadius={65} outerRadius={105} paddingAngle={2} stroke="transparent">{donutData.map((e,i)=><Cell key={i} fill={e.color}/>)}</Pie></PieChart>
+                <PieChart><Pie data={donut} dataKey="value" innerRadius={65} outerRadius={105} paddingAngle={2} stroke="transparent">{donut.map((e:any,i:number)=><Cell key={i} fill={e.color}/>)}</Pie></PieChart>
               </ResponsiveContainer>
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                <span className="text-[44px] font-black leading-none">327</span>
+                <span className="text-[44px] font-black leading-none">{totalDonut}</span>
                 <span className="text-slate-400 text-[12px]">Total</span>
               </div>
             </div>
             <div className="w-[45%] space-y-3">
-              {[...donutData].reverse().map((item,i)=>(
+              {[...donut].reverse().map((item:any,i:number)=>(
                 <div key={i} className="flex items-center justify-between">
                   <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full" style={{background:item.color}}/><span className="text-[12px] text-slate-300">{item.name}</span></div>
                   <div><span className="font-bold text-[13px] mr-1">{item.value}</span><span className="text-slate-500 text-[11px]">({item.pct})</span></div>
@@ -298,19 +345,31 @@ function VGeral({ac,sac}:any) {
         </div>
         <table className="w-full">
           <thead><tr className="border-b border-white/[0.06]">{["UF","Unidade","Especialidade","Aguardando","Em Atendimento","Tempo Máximo","Média Espera","Status","Tendência"].map(h=><th key={h} className="text-left pb-3 pr-4 text-[12px] text-slate-400 font-medium whitespace-nowrap">{h}</th>)}</tr></thead>
-          <tbody>{tableData.map((r,i)=><tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02] transition-colors"><td className="py-2.5 pr-4 text-[13px] font-bold text-slate-300">{r.uf}</td><td className="py-2.5 pr-4 text-[13px]">{r.unidade}</td><td className="py-2.5 pr-4 text-[13px] text-slate-300">{r.esp}</td><td className="py-2.5 pr-4 text-[13px] font-bold">{r.agu}</td><td className="py-2.5 pr-4 text-[13px]">{r.ate}</td><td className="py-2.5 pr-4 text-[13px] font-bold" style={{color:SC[r.status]}}>{r.max}</td><td className="py-2.5 pr-4 text-[13px]">{r.med}</td><td className="py-2.5 pr-4"><Badge status={r.status}/></td><td className="py-2.5"><Tiny color={SC[r.status]}/></td></tr>)}</tbody>
+          <tbody>{tbl.map((r:any,i:number)=><tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02] transition-colors"><td className="py-2.5 pr-4 text-[13px] font-bold text-slate-300">{r.uf}</td><td className="py-2.5 pr-4 text-[13px]">{r.unidade}</td><td className="py-2.5 pr-4 text-[13px] text-slate-300">{r.esp}</td><td className="py-2.5 pr-4 text-[13px] font-bold">{r.agu}</td><td className="py-2.5 pr-4 text-[13px]">{r.ate}</td><td className="py-2.5 pr-4 text-[13px] font-bold" style={{color:SC[r.status]}}>{r.max}</td><td className="py-2.5 pr-4 text-[13px]">{r.med}</td><td className="py-2.5 pr-4"><Badge status={r.status}/></td><td className="py-2.5"><Tiny color={SC[r.status]}/></td></tr>)}</tbody>
         </table>
       </Card>
     </>
   );
 }
 
-function VOperacao() {
+function VOperacao({dash}:any) {
+  const r = dash?.resumo;
+  const tbl = dash?.hospitais?.map((h:any) => ({
+    uf:h.uf, unidade:h.unidade, esp:h.especialidade,
+    agu:h.pacientesAguardando, ate:h.pacientesAtendimento,
+    max:h.tempoMaximo, med:"-", status:h.status,
+  })) || tableDataMock;
+
   return (
     <>
       <Title t="Operação ao Vivo" s="Monitoramento em tempo real · atualiza a cada 30s"/>
       <div className="grid grid-cols-4 gap-3 mb-3">
-        {[{l:"Hospitais Online",v:"47",i:<Zap size={18}/>,c:"#22c55e"},{l:"Críticos",v:"14",i:<AlertTriangle size={18}/>,c:"#ef4444"},{l:"Total na Fila",v:"327",i:<Users size={18}/>,c:"#8b5cf6"},{l:"Atendidos hoje",v:"1.284",i:<CheckCircle size={18}/>,c:"#06b6d4"}].map((k,i)=>(
+        {[
+          {l:"Hospitais Online",v:String(r?.totalRegistros ?? 47),   i:<Zap size={18}/>,        c:"#22c55e"},
+          {l:"Críticos",        v:String(r?.criticos ?? 14),         i:<AlertTriangle size={18}/>,c:"#ef4444"},
+          {l:"Total na Fila",   v:String(r?.totalAguardando ?? 327), i:<Users size={18}/>,       c:"#8b5cf6"},
+          {l:"Atendidos hoje",  v:"1.284",                           i:<CheckCircle size={18}/>, c:"#06b6d4"},
+        ].map((k,i)=>(
           <Card key={i} className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-xl flex items-center justify-center" style={{background:`${k.c}20`}}><span style={{color:k.c}}>{k.i}</span></div>
             <div><p className="text-slate-400 text-[12px]">{k.l}</p><p className="text-[28px] font-black leading-none mt-0.5">{k.v}</p></div>
@@ -325,7 +384,7 @@ function VOperacao() {
           </div>
           <table className="w-full">
             <thead><tr className="border-b border-white/[0.06]">{["UF","Unidade","Especialidade","Fila","Atend.","Máx","Média","Status"].map(h=><th key={h} className="text-left pb-2 pr-3 text-[11px] text-slate-400 font-medium">{h}</th>)}</tr></thead>
-            <tbody>{tableData.map((r,i)=><tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02]"><td className="py-2 pr-3 text-[12px] font-bold text-slate-300">{r.uf}</td><td className="py-2 pr-3 text-[12px]">{r.unidade}</td><td className="py-2 pr-3 text-[12px] text-slate-400">{r.esp}</td><td className="py-2 pr-3 text-[12px] font-black" style={{color:r.agu>8?"#ef4444":r.agu>4?"#fb923c":"#22c55e"}}>{r.agu}</td><td className="py-2 pr-3 text-[12px]">{r.ate}</td><td className="py-2 pr-3 text-[12px] font-bold" style={{color:SC[r.status]}}>{r.max}</td><td className="py-2 pr-3 text-[12px]">{r.med}</td><td className="py-2"><Badge status={r.status}/></td></tr>)}</tbody>
+            <tbody>{tbl.map((r:any,i:number)=><tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02]"><td className="py-2 pr-3 text-[12px] font-bold text-slate-300">{r.uf}</td><td className="py-2 pr-3 text-[12px]">{r.unidade}</td><td className="py-2 pr-3 text-[12px] text-slate-400">{r.esp}</td><td className="py-2 pr-3 text-[12px] font-black" style={{color:r.agu>8?"#ef4444":r.agu>4?"#fb923c":"#22c55e"}}>{r.agu}</td><td className="py-2 pr-3 text-[12px]">{r.ate}</td><td className="py-2 pr-3 text-[12px] font-bold" style={{color:SC[r.status]}}>{r.max}</td><td className="py-2 pr-3 text-[12px]">{r.med}</td><td className="py-2"><Badge status={r.status}/></td></tr>)}</tbody>
           </table>
         </Card>
         <Card className="col-span-4">
@@ -620,20 +679,20 @@ function VConfig() {
           <h2 className="text-[16px] font-black mb-4">Fonte de Dados</h2>
           <div className="space-y-3">
             <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
-              <p className="text-[12px] text-slate-400 mb-1">Arquivo Excel (OneDrive)</p>
-              <p className="text-[12px] font-mono text-blue-400">Mac.Exportação BI tempo de esperas.xlsm</p>
+              <p className="text-[12px] text-slate-400 mb-1">Banco de Dados</p>
+              <p className="text-[12px] font-mono text-blue-400">Firebase Firestore</p>
             </div>
             <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
               <p className="text-[12px] text-slate-400 mb-1">Status</p>
-              <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-yellow-400"/><p className="text-[12px] text-yellow-400">Autenticação corporativa necessária</p></div>
+              <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-green-400 animate-pulse"/><p className="text-[12px] text-green-400">Conectado</p></div>
             </div>
-            <button className="w-full py-2.5 rounded-xl bg-[#2563EB] text-[13px] font-bold flex items-center justify-center gap-2 hover:bg-blue-500 transition-all"><RefreshCw size={14}/> Testar Conexão</button>
+            <a href="/upload" className="w-full py-2.5 rounded-xl bg-[#2563EB] text-[13px] font-bold flex items-center justify-center gap-2 hover:bg-blue-500 transition-all"><RefreshCw size={14}/> Atualizar Dados</a>
           </div>
         </Card>
         <Card>
           <h2 className="text-[16px] font-black mb-4">Sobre o Sistema</h2>
           <div className="space-y-3 text-[13px]">
-            {[["Versão","1.0.0"],["Ambiente","GitHub Codespaces"],["Framework","Next.js + TypeScript"],["UI","TailwindCSS + Recharts"]].map(([k,v])=>(
+            {[["Versão","1.0.0"],["Ambiente","Vercel"],["Framework","Next.js + TypeScript"],["Banco","Firebase Firestore"],["UI","TailwindCSS + Recharts"]].map(([k,v])=>(
               <div key={k} className="flex justify-between py-2 border-b border-white/[0.04]"><span className="text-slate-400">{k}</span><span className="font-medium">{v}</span></div>
             ))}
           </div>
@@ -648,10 +707,31 @@ export default function Page() {
   const [clock,setClock]  = useState("");
   const [nav,setNav]      = useState("Visão Geral");
   const [ac,sac]          = useState<"Linha"|"Área"|"Barras">("Linha");
+  const [dashData, setDashData] = useState<DashData | null>(null);
+  const [ultimaAtu, setUltimaAtu] = useState("carregando...");
 
   useEffect(()=>{
     const fmt=()=>setClock(new Date().toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit",second:"2-digit"}));
     fmt(); const id=setInterval(fmt,1000); return()=>clearInterval(id);
+  },[]);
+
+  useEffect(()=>{
+    const load = async () => {
+      try {
+        const res = await fetch("/api/dados");
+        const data = await res.json();
+        if (data.resumo) {
+          setDashData(data);
+          const info = [data.turno, data.data].filter(Boolean).join(" — ");
+          setUltimaAtu(info || data.atualizadoEm || "agora");
+        }
+      } catch(e) {
+        console.error("Erro ao buscar dados:", e);
+      }
+    };
+    load();
+    const id = setInterval(load, 30000);
+    return () => clearInterval(id);
   },[]);
 
   return (
@@ -694,7 +774,7 @@ export default function Page() {
             <div className="flex items-center gap-3">
               <h1 className="text-[20px] font-black tracking-tight">Central Operacional — Tempo de Espera Médica</h1>
               <div className="w-2.5 h-2.5 rounded-full bg-green-400 shadow-[0_0_12px_rgba(74,222,128,.9)]"/>
-              <span className="text-slate-400 text-[12px]">Atualizado agora há 30s</span>
+              <span className="text-slate-400 text-[12px]">Atualizado: {ultimaAtu}</span>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -704,8 +784,8 @@ export default function Page() {
           </div>
         </header>
 
-        {nav==="Visão Geral"      && <VGeral ac={ac} sac={sac}/>}
-        {nav==="Operação ao Vivo" && <VOperacao/>}
+        {nav==="Visão Geral"      && <VGeral ac={ac} sac={sac} dash={dashData}/>}
+        {nav==="Operação ao Vivo" && <VOperacao dash={dashData}/>}
         {nav==="Ranking"          && <VRanking/>}
         {nav==="Especialidades"   && <VEspec/>}
         {nav==="Estados (UF)"     && <VEstados/>}
