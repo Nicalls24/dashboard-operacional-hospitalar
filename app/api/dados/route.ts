@@ -1,76 +1,91 @@
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
+import { initializeApp, getApps, cert } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
 
-// ── In-memory cache (persists while Vercel function is warm) ──────────────────
-let cachedData: any = null;
-let cachedAt: string = "";
+// ── Firebase Admin (server-side) ──────────────────────────────────────────────
+function getAdminDb() {
+  if (getApps().length === 0) {
+    initializeApp({
+      credential: cert({
+        projectId:    process.env.FIREBASE_PROJECT_ID,
+        clientEmail:  process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey:   process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+      }),
+    });
+  }
+  return getFirestore();
+}
 
-// ── POST — recebe Excel em base64 do Power Automate ───────────────────────────
+// ── POST — recebe Excel em base64, processa e salva no Firestore ──────────────
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { excel, filename } = body;
+    const { excel, filename, senha } = body;
+
+    // Validar senha de upload
+    if (senha !== process.env.UPLOAD_PASSWORD) {
+      return NextResponse.json({ ok: false, erro: "Senha incorreta" }, { status: 401 });
+    }
 
     if (!excel) {
       return NextResponse.json({ ok: false, erro: "Campo 'excel' não enviado" }, { status: 400 });
     }
 
-    const buffer = Buffer.from(excel, "base64");
+    const buffer   = Buffer.from(excel, "base64");
     const workbook = XLSX.read(buffer, { type: "buffer" });
+    const parsed   = parseWorkbook(workbook, filename || "");
 
-    const parsed = parseWorkbook(workbook, filename || "");
-    cachedData = parsed;
-    cachedAt = new Date().toISOString();
+    // Salvar no Firestore
+    const db  = getAdminDb();
+    const ref = db.collection("dashboard").doc("atual");
+    await ref.set({ ...parsed, salvoEm: new Date().toISOString() });
 
-    console.log(`[/api/dados POST] Dados atualizados: ${parsed.resumo.totalRegistros} registros`);
-    return NextResponse.json({ ok: true, registros: parsed.resumo.totalRegistros, atualizadoEm: cachedAt });
+    // Salvar histórico
+    await db.collection("historico").add({
+      resumo:    parsed.resumo,
+      arquivo:   filename,
+      salvoEm:   new Date().toISOString(),
+    });
+
+    return NextResponse.json({
+      ok:          true,
+      registros:   parsed.resumo.totalRegistros,
+      atualizadoEm: parsed.atualizadoEm,
+    });
 
   } catch (err) {
-    console.error("[/api/dados POST] Erro:", err);
+    console.error("[POST /api/dados]", err);
     return NextResponse.json({ ok: false, erro: String(err) }, { status: 500 });
   }
 }
 
-// ── GET — retorna dados em cache ou mock ──────────────────────────────────────
+// ── GET — lê dados do Firestore ───────────────────────────────────────────────
 export async function GET() {
   try {
-    if (cachedData) {
-      return NextResponse.json({ ...cachedData, fonte: "cache", cachedAt });
+    const db  = getAdminDb();
+    const doc = await db.collection("dashboard").doc("atual").get();
+
+    if (doc.exists) {
+      return NextResponse.json({ ...doc.data(), fonte: "firestore" });
     }
 
-    // Tenta buscar do OneDrive se configurado
-    const url = process.env.ONEDRIVE_EXCEL_URL;
-    if (url) {
-      const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) });
-      if (res.ok) {
-        const buffer = Buffer.from(await res.arrayBuffer());
-        const workbook = XLSX.read(buffer, { type: "buffer" });
-        const parsed = parseWorkbook(workbook, "onedrive");
-        cachedData = parsed;
-        cachedAt = new Date().toISOString();
-        return NextResponse.json({ ...parsed, fonte: "onedrive", cachedAt });
-      }
-    }
-
-    // Fallback: mock data
     return NextResponse.json({ ...mockData(), fonte: "mock" });
 
   } catch (err) {
-    console.error("[/api/dados GET] Erro:", err);
+    console.error("[GET /api/dados]", err);
     return NextResponse.json({ ...mockData(), fonte: "mock" });
   }
 }
 
 // ── Parser de workbook ────────────────────────────────────────────────────────
 function parseWorkbook(workbook: XLSX.WorkBook, filename: string) {
-  // Prioriza aba GERAL, senão usa a última aba com dados
   let sheetName = workbook.SheetNames.find(n => n.toUpperCase().includes("GERAL"))
     || workbook.SheetNames[workbook.SheetNames.length - 1];
 
   const sheet = workbook.Sheets[sheetName];
   const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
 
-  // Encontra linha de cabeçalho (UF / Unidade)
   let headerIdx = -1;
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
@@ -80,7 +95,6 @@ function parseWorkbook(workbook: XLSX.WorkBook, filename: string) {
     }
   }
 
-  // Extrai metadados (primeiras linhas)
   let atualizacaoBI = "";
   for (let i = 0; i < (headerIdx > 0 ? headerIdx : 5); i++) {
     const cell = String(rows[i]?.[0] || "");
@@ -91,8 +105,8 @@ function parseWorkbook(workbook: XLSX.WorkBook, filename: string) {
 
   const hospitais: any[] = [];
   for (let i = headerIdx + 1; i < rows.length; i++) {
-    const r = rows[i];
-    const uf = String(r[0] || "").trim();
+    const r      = rows[i];
+    const uf     = String(r[0] || "").trim();
     const unidade = String(r[1] || "").trim();
     if (!uf && !unidade) continue;
     if (uf.toUpperCase() === "TOTAL") break;
@@ -101,8 +115,7 @@ function parseWorkbook(workbook: XLSX.WorkBook, filename: string) {
     const tempoMin = toMinutes(tempoStr);
 
     hospitais.push({
-      uf,
-      unidade,
+      uf, unidade,
       especialidade:        String(r[2] || "").trim(),
       pacientesAguardando:  Number(r[3]) || 0,
       pacientesAtendimento: Number(r[4]) || 0,
@@ -114,9 +127,9 @@ function parseWorkbook(workbook: XLSX.WorkBook, filename: string) {
     });
   }
 
-  const sorted = [...hospitais].sort((a, b) => b.tempoMaximoMin - a.tempoMaximoMin);
+  const sorted      = [...hospitais].sort((a, b) => b.tempoMaximoMin - a.tempoMaximoMin);
   const temposValidos = hospitais.filter(h => h.tempoMaximoMin > 0).map(h => h.tempoMaximoMin);
-  const tempoMedio = temposValidos.length
+  const tempoMedio  = temposValidos.length
     ? Math.round(temposValidos.reduce((a, b) => a + b, 0) / temposValidos.length) : 0;
 
   return {
@@ -132,20 +145,19 @@ function parseWorkbook(workbook: XLSX.WorkBook, filename: string) {
       maiorEspera:         sorted[0]?.tempoMaximo || "00:00",
       maiorEsperaUnidade:  sorted[0]?.unidade || "",
       maiorEsperaUF:       sorted[0]?.uf || "",
-      criticos:            hospitais.filter(h => h.status === "Crítico").length,
-      graves:              hospitais.filter(h => h.status === "Grave").length,
-      atencao:             hospitais.filter(h => h.status === "Atenção").length,
-      normais:             hospitais.filter(h => h.status === "Normal").length,
+      criticos:  hospitais.filter(h => h.status === "Crítico").length,
+      graves:    hospitais.filter(h => h.status === "Grave").length,
+      atencao:   hospitais.filter(h => h.status === "Atenção").length,
+      normais:   hospitais.filter(h => h.status === "Normal").length,
     },
-    top10:    sorted.slice(0, 10),
+    top10:     sorted.slice(0, 10),
     hospitais: sorted,
   };
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
 function toMinutes(t: string): number {
   if (!t || t === "*") return 0;
-  const mMin = t.match(/^(\d+)\s*MIN$/i);
+  const mMin  = t.match(/^(\d+)\s*MIN$/i);
   if (mMin) return parseInt(mMin[1]);
   const mHora = t.match(/^(\d+):(\d{2})$/);
   if (mHora) return parseInt(mHora[1]) * 60 + parseInt(mHora[2]);
@@ -162,34 +174,16 @@ function classifyStatus(min: number): string {
   return "Normal";
 }
 
-// ── Mock data ─────────────────────────────────────────────────────────────────
 function mockData() {
-  const hospitais = [
-    { uf:"PI", unidade:"Hospital Rio Poty",         especialidade:"Clínica Médica", pacientesAguardando:3,  pacientesAtendimento:1, tempoMaximo:"4:53", tempoMaximoMin:293, status:"Crítico", motivo:"", observacoes:"" },
-    { uf:"BA", unidade:"Hospital Teresa de Lisieux",especialidade:"Obstetrícia",    pacientesAguardando:6,  pacientesAtendimento:0, tempoMaximo:"2:38", tempoMaximoMin:158, status:"Crítico", motivo:"", observacoes:"" },
-    { uf:"PE", unidade:"PA Derby",                  especialidade:"Clínica Médica", pacientesAguardando:14, pacientesAtendimento:7, tempoMaximo:"2:37", tempoMaximoMin:157, status:"Crítico", motivo:"", observacoes:"" },
-    { uf:"SP", unidade:"Hosp Notrecare ABC",         especialidade:"Pediatria",      pacientesAguardando:11, pacientesAtendimento:6, tempoMaximo:"2:16", tempoMaximoMin:136, status:"Crítico", motivo:"", observacoes:"" },
-    { uf:"SP", unidade:"Hospital Salvalus",          especialidade:"Clínica Médica", pacientesAguardando:8,  pacientesAtendimento:6, tempoMaximo:"2:09", tempoMaximoMin:129, status:"Crítico", motivo:"", observacoes:"" },
-    { uf:"SP", unidade:"PA Barueri",                 especialidade:"Pediatria",      pacientesAguardando:5,  pacientesAtendimento:3, tempoMaximo:"1:31", tempoMaximoMin:91,  status:"Crítico", motivo:"", observacoes:"" },
-    { uf:"CE", unidade:"Hospital Ana Lima",          especialidade:"Clínica Médica", pacientesAguardando:7,  pacientesAtendimento:4, tempoMaximo:"1:29", tempoMaximoMin:89,  status:"Grave",  motivo:"", observacoes:"" },
-    { uf:"CE", unidade:"Hosp. Eugenia Pinheiro",     especialidade:"Ortopedia",      pacientesAguardando:4,  pacientesAtendimento:2, tempoMaximo:"1:25", tempoMaximoMin:85,  status:"Grave",  motivo:"", observacoes:"" },
-    { uf:"GO", unidade:"Hospital Encore Goiás",      especialidade:"Clínica Médica", pacientesAguardando:2,  pacientesAtendimento:5, tempoMaximo:"0:22", tempoMaximoMin:22,  status:"Atenção",motivo:"", observacoes:"" },
-    { uf:"MG", unidade:"Hosp. Hapvida BH",           especialidade:"Ortopedia",      pacientesAguardando:3,  pacientesAtendimento:4, tempoMaximo:"0:18", tempoMaximoMin:18,  status:"Normal", motivo:"", observacoes:"" },
-  ];
   return {
     ok: true,
     atualizadoEm: new Date().toISOString(),
     resumo: {
-      totalRegistros: hospitais.length,
-      totalAguardando: hospitais.reduce((s,h)=>s+h.pacientesAguardando,0),
-      totalAtendimento: hospitais.reduce((s,h)=>s+h.pacientesAtendimento,0),
-      tempoMedioFormatado: "00:28",
-      maiorEspera: "4:53",
-      maiorEsperaUnidade: "Hospital Rio Poty",
-      maiorEsperaUF: "PI",
-      criticos: 6, graves: 2, atencao: 1, normais: 1,
+      totalRegistros: 0, totalAguardando: 0, totalAtendimento: 0,
+      tempoMedioFormatado: "00:00", maiorEspera: "00:00",
+      maiorEsperaUnidade: "", maiorEsperaUF: "",
+      criticos: 0, graves: 0, atencao: 0, normais: 0,
     },
-    top10: hospitais.slice(0, 10),
-    hospitais,
+    top10: [], hospitais: [],
   };
 }
