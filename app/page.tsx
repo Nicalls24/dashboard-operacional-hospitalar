@@ -100,12 +100,14 @@ const BRAZIL_PATHS: Record<string, { path: string; label: string; cx: number; cy
 
 export default function Dashboard() {
   const [data, setData] = useState<Registro[]>([]);
+  const [motivos, setMotivos] = useState<Record<string, { motivo: string; observacoes: string }>>({});
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState("");
   const [activeSection, setActiveSection] = useState("visao");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [refreshInterval, setRefreshInterval] = useState(60);
-  const [slaThreshold, setSlaThreshold] = useState(30);
+  const [slaThreshold, setSlaThreshold] = useState(15);
+  const SLA_META = 75; // % meta: 75% dos registros abaixo do threshold
   const [alertsEnabled, setAlertsEnabled] = useState(true);
 
   // Filters for main table
@@ -139,14 +141,20 @@ export default function Dashboard() {
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    const { data: rows } = await sb
-      .from("espera")
-      .select("*")
-      .order("tempo_espera_min", { ascending: false });
-    if (rows) {
-      setData(rows as Registro[]);
-      setLastUpdate(new Date().toLocaleTimeString("pt-BR"));
+    const [{ data: rows }, { data: motivosRows }] = await Promise.all([
+      sb.from("espera").select("*").order("tempo_espera_min", { ascending: false }),
+      sb.from("motivos_espera").select("nm_local, ds_especialidade, motivo, observacoes"),
+    ]);
+    if (rows) setData(rows as Registro[]);
+    if (motivosRows) {
+      const map: Record<string, { motivo: string; observacoes: string }> = {};
+      motivosRows.forEach((r: { nm_local: string; ds_especialidade: string; motivo: string; observacoes: string }) => {
+        const key = `${r.nm_local}|||${r.ds_especialidade}`;
+        map[key] = { motivo: r.motivo, observacoes: r.observacoes };
+      });
+      setMotivos(map);
     }
+    setLastUpdate(new Date().toLocaleTimeString("pt-BR"));
     setLoading(false);
   }, []);
 
@@ -300,6 +308,52 @@ export default function Dashboard() {
     return { dentroSLA, foraSLA, pct, porUF: ufSLA };
   }, [data, slaThreshold, porUF]);
 
+  // ── DADOS ANALÍTICOS (Relatórios) ──────────────────────────────────────────
+  const SLA_MIN = 15; // threshold fixo de negócio
+
+  const slaByHora = useMemo(() => {
+    const map: Record<number, { total: number; ok: number }> = {};
+    data.forEach(r => {
+      const h = Math.floor(r.hr_registro_espera_min / 60);
+      if (!map[h]) map[h] = { total: 0, ok: 0 };
+      map[h].total++;
+      if (r.tempo_espera_min <= SLA_MIN) map[h].ok++;
+    });
+    return Object.entries(map).sort(([a],[b]) => Number(a)-Number(b)).map(([h,v]) => ({
+      hora: `${h}h`, pct: Math.round((v.ok/v.total)*100), total: v.total, ok: v.ok, meta: 75
+    }));
+  }, [data]);
+
+  const ufSLAAnalitico = useMemo(() =>
+    porUF.map(u => {
+      const ufData = data.filter(r => r.uf === u.uf);
+      const ok = ufData.filter(r => r.tempo_espera_min <= SLA_MIN).length;
+      const pct = Math.round((ok/ufData.length)*100);
+      return { uf: u.uf, pct, ok, fora: ufData.length - ok, total: ufData.length, meta: 75 };
+    }).sort((a,b) => b.pct - a.pct)
+  , [data, porUF]);
+
+  const espSLAAnalitico = useMemo(() =>
+    porEsp.map(e => {
+      const espData = data.filter(r => r.ds_especialidade === e.esp);
+      const ok = espData.filter(r => r.tempo_espera_min <= SLA_MIN).length;
+      const pct = Math.round((ok/espData.length)*100);
+      return { esp: e.esp, pct, ok, fora: espData.length - ok, total: espData.length, meta: 75 };
+    }).sort((a,b) => b.pct - a.pct)
+  , [data, porEsp]);
+
+  const kpisSLA = useMemo(() => {
+    const total = data.length;
+    const ok = data.filter(r => r.tempo_espera_min <= SLA_MIN).length;
+    const fora = total - ok;
+    const pct = total ? Math.round((ok/total)*100) : 0;
+    const hospitaisOk = new Set(data.filter(r => r.tempo_espera_min <= SLA_MIN).map(r => r.nm_local)).size;
+    const hospitaisFora = new Set(data.filter(r => r.tempo_espera_min > SLA_MIN).map(r => r.nm_local)).size;
+    const melhorUF = [...ufSLAAnalitico].sort((a,b) => b.pct - a.pct)[0];
+    const piorUF   = [...ufSLAAnalitico].sort((a,b) => a.pct - b.pct)[0];
+    return { total, ok, fora, pct, hospitaisOk, hospitaisFora, melhorUF, piorUF };
+  }, [data, ufSLAAnalitico]);
+
   // Vivo filtered
   const vivoFiltered = useMemo(() => {
     return data.filter(r => {
@@ -320,11 +374,206 @@ export default function Dashboard() {
     const headers = ["UF","Unidade","Médico","Especialidade","Cidade","Aguardando","Tempo Espera (min)","Tempo Atraso (min)","Status","Atraso"];
     const rows = filtered.map(r => [r.uf, r.nm_local, r.nm_medico, r.ds_especialidade, r.cidade, r.qt_pacientes_aguardando, r.tempo_espera_min, r.tempo_atraso_min ?? "", r.status, r.atraso]);
     const csv = [headers, ...rows].map(r => r.map(v => `"${v}"`).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url; a.download = `hapvida-espera-${new Date().toISOString().slice(0,10)}.csv`;
     a.click(); URL.revokeObjectURL(url);
+  }
+
+  function gerarPDFSLA() {
+    const total = data.length;
+    const dentroSLA = data.filter(r => r.tempo_espera_min <= 15).length;
+    const pctGeral = total ? Math.round((dentroSLA / total) * 100) : 0;
+    const metaAtingida = pctGeral >= 75;
+
+    // por UF
+    const ufRows = porUF.map(u => {
+      const ufData = data.filter(r => r.uf === u.uf);
+      const ok = ufData.filter(r => r.tempo_espera_min <= 15).length;
+      const pct = Math.round((ok / ufData.length) * 100);
+      return { uf: u.uf, total: ufData.length, ok, fora: ufData.length - ok, pct, hospitais: u.hospitais };
+    }).sort((a, b) => a.pct - b.pct);
+
+    const maxBar = 300;
+    const barH = 18;
+    const barGap = 6;
+    const chartH = ufRows.length * (barH + barGap) + 40;
+
+    const barsHtml = ufRows.map((u, i) => {
+      const y = 30 + i * (barH + barGap);
+      const w = Math.round((u.pct / 100) * maxBar);
+      const color = u.pct >= 75 ? "#16a34a" : u.pct >= 50 ? "#d97706" : "#dc2626";
+      const metaX = Math.round(0.75 * maxBar);
+      return `
+        <text x="44" y="${y + barH/2 + 4}" font-size="10" fill="#374151" text-anchor="end" font-family="Arial">${u.uf}</text>
+        <rect x="48" y="${y}" width="${w}" height="${barH}" fill="${color}" rx="3"/>
+        <text x="${48 + w + 4}" y="${y + barH/2 + 4}" font-size="10" fill="${color}" font-weight="bold" font-family="Arial">${u.pct}%</text>
+        <line x1="${48 + metaX}" y1="${y - 2}" x2="${48 + metaX}" y2="${y + barH + 2}" stroke="#6b7280" stroke-width="1" stroke-dasharray="3,2"/>
+      `;
+    }).join("");
+
+    const tableRows = ufRows.map((u, i) => `
+      <tr style="background:${i % 2 === 0 ? '#f9fafb' : '#fff'}">
+        <td style="padding:7px 10px;font-weight:700;color:#111">${u.uf}</td>
+        <td style="padding:7px 10px;text-align:center;color:#374151">${u.hospitais}</td>
+        <td style="padding:7px 10px;text-align:center;color:#374151">${u.total.toLocaleString('pt-BR')}</td>
+        <td style="padding:7px 10px;text-align:center;color:#16a34a;font-weight:700">${u.ok.toLocaleString('pt-BR')}</td>
+        <td style="padding:7px 10px;text-align:center;color:#dc2626;font-weight:700">${u.fora.toLocaleString('pt-BR')}</td>
+        <td style="padding:7px 10px;text-align:center">
+          <span style="font-weight:800;color:${u.pct >= 75 ? '#16a34a' : u.pct >= 50 ? '#d97706' : '#dc2626'}">${u.pct}%</span>
+        </td>
+        <td style="padding:7px 10px;text-align:center">
+          <span style="display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:700;
+            background:${u.pct >= 75 ? '#dcfce7' : u.pct >= 50 ? '#fef9c3' : '#fee2e2'};
+            color:${u.pct >= 75 ? '#15803d' : u.pct >= 50 ? '#92400e' : '#b91c1c'}">
+            ${u.pct >= 75 ? '✓ Meta atingida' : `✗ ${u.pct - 75}%`}
+          </span>
+        </td>
+      </tr>`).join("");
+
+    const now = new Date().toLocaleString("pt-BR");
+    const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"/>
+<title>Relatório SLA — Hapvida</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: Arial, sans-serif; color: #111; background: #fff; }
+  @page { size: A4; margin: 18mm 15mm; }
+  @media print { .no-print { display:none; } }
+</style>
+</head>
+<body>
+<!-- HEADER -->
+<div style="display:flex;align-items:center;justify-content:space-between;padding:18px 0 14px;border-bottom:3px solid #1e3a8a;margin-bottom:20px">
+  <div style="display:flex;align-items:center;gap:12px">
+    <div style="width:44px;height:44px;background:#ff6b00;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:900;color:#fff">✳</div>
+    <div>
+      <div style="font-size:20px;font-weight:900;color:#1e3a8a;line-height:1">Hapvida</div>
+      <div style="font-size:11px;color:#64748b">Central Operacional</div>
+    </div>
+  </div>
+  <div style="text-align:right">
+    <div style="font-size:15px;font-weight:800;color:#1e3a8a">Relatório SLA & Metas</div>
+    <div style="font-size:11px;color:#64748b">Gerado em ${now}</div>
+    <div style="font-size:11px;color:#64748b">${total.toLocaleString('pt-BR')} registros analisados</div>
+  </div>
+</div>
+
+<!-- DEFINIÇÃO SLA -->
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:20px">
+  <div style="border:1px solid #e2e8f0;border-radius:10px;padding:14px;background:#f8fafc">
+    <div style="font-size:10px;text-transform:uppercase;color:#64748b;letter-spacing:1px;margin-bottom:6px">Processo</div>
+    <div style="font-size:14px;font-weight:800;color:#1e3a8a">Tempo de Espera Emergência</div>
+  </div>
+  <div style="border:2px solid #3b82f6;border-radius:10px;padding:14px;background:#eff6ff;text-align:center">
+    <div style="font-size:10px;text-transform:uppercase;color:#64748b;letter-spacing:1px;margin-bottom:6px">SLA</div>
+    <div style="font-size:28px;font-weight:900;color:#1d4ed8">15 min</div>
+  </div>
+  <div style="border:2px solid #16a34a;border-radius:10px;padding:14px;background:#f0fdf4;text-align:center">
+    <div style="font-size:10px;text-transform:uppercase;color:#64748b;letter-spacing:1px;margin-bottom:6px">Meta</div>
+    <div style="font-size:28px;font-weight:900;color:#15803d">75% &lt; 15m</div>
+  </div>
+</div>
+
+<!-- KPI CARDS -->
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:24px">
+  <div style="border:2px solid ${metaAtingida ? '#16a34a' : '#dc2626'};border-radius:10px;padding:16px;background:${metaAtingida ? '#f0fdf4' : '#fef2f2'}">
+    <div style="font-size:11px;color:#64748b;margin-bottom:4px">Dentro do SLA (≤15min)</div>
+    <div style="font-size:36px;font-weight:900;color:${metaAtingida ? '#15803d' : '#b91c1c'}">${pctGeral}%</div>
+    <div style="font-size:12px;color:#64748b">${dentroSLA.toLocaleString('pt-BR')} registros</div>
+    <div style="margin-top:8px;height:6px;background:#e2e8f0;border-radius:99px;overflow:hidden;position:relative">
+      <div style="height:100%;width:${pctGeral}%;background:${metaAtingida ? '#16a34a' : '#dc2626'};border-radius:99px"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;margin-top:3px">
+      <span style="font-size:9px;color:#94a3b8">0%</span>
+      <span style="font-size:9px;color:#94a3b8">▲ Meta 75%</span>
+      <span style="font-size:9px;color:#94a3b8">100%</span>
+    </div>
+    <div style="margin-top:8px;display:inline-block;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:700;
+      background:${metaAtingida ? '#dcfce7' : '#fee2e2'};color:${metaAtingida ? '#15803d' : '#b91c1c'}">
+      ${metaAtingida ? '✓ Meta atingida' : '✗ Abaixo da meta'}
+    </div>
+  </div>
+  <div style="border:1px solid #e2e8f0;border-radius:10px;padding:16px;background:#fef2f2">
+    <div style="font-size:11px;color:#64748b;margin-bottom:4px">Fora do SLA (&gt;15min)</div>
+    <div style="font-size:36px;font-weight:900;color:#b91c1c">${100 - pctGeral}%</div>
+    <div style="font-size:12px;color:#64748b">${(total - dentroSLA).toLocaleString('pt-BR')} registros</div>
+  </div>
+  <div style="border:1px solid #e2e8f0;border-radius:10px;padding:16px;background:#fff7ed">
+    <div style="font-size:11px;color:#64748b;margin-bottom:4px">Estados abaixo da meta</div>
+    <div style="font-size:36px;font-weight:900;color:#c2410c">${ufRows.filter(u => u.pct < 75).length} <span style="font-size:16px;color:#94a3b8">de ${ufRows.length}</span></div>
+    <div style="font-size:11px;color:#64748b;margin-top:4px">${ufRows.filter(u => u.pct < 75).map(u => u.uf).slice(0,8).join(', ')}</div>
+  </div>
+</div>
+
+<!-- GRÁFICO -->
+<div style="border:1px solid #e2e8f0;border-radius:10px;padding:18px;margin-bottom:20px;background:#fafafa">
+  <div style="font-size:14px;font-weight:800;color:#1e3a8a;margin-bottom:14px">% SLA por Estado (ordenado do pior ao melhor)</div>
+  <svg width="100%" viewBox="0 0 420 ${chartH}" xmlns="http://www.w3.org/2000/svg">
+    <text x="48" y="18" font-size="10" fill="#94a3b8" font-family="Arial">0%</text>
+    <text x="${48 + Math.round(0.75 * maxBar) - 8}" y="18" font-size="10" fill="#6b7280" font-family="Arial">▼ 75%</text>
+    <text x="${48 + maxBar - 14}" y="18" font-size="10" fill="#94a3b8" font-family="Arial">100%</text>
+    ${barsHtml}
+  </svg>
+  <div style="display:flex;gap:16px;margin-top:10px;font-size:11px;color:#64748b">
+    <span><span style="display:inline-block;width:10px;height:10px;background:#16a34a;border-radius:2px;margin-right:4px"></span>Atingiu meta (≥75%)</span>
+    <span><span style="display:inline-block;width:10px;height:10px;background:#d97706;border-radius:2px;margin-right:4px"></span>Atenção (50–74%)</span>
+    <span><span style="display:inline-block;width:10px;height:10px;background:#dc2626;border-radius:2px;margin-right:4px"></span>Crítico (&lt;50%)</span>
+    <span><span style="display:inline-block;width:10px;height:2px;background:#6b7280;margin-right:4px;vertical-align:middle;border-top:2px dashed #6b7280"></span>Meta 75%</span>
+  </div>
+</div>
+
+<!-- TABELA -->
+<div style="border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-bottom:24px">
+  <table style="width:100%;border-collapse:collapse;font-size:12px">
+    <thead>
+      <tr style="background:#1e3a8a;color:#fff">
+        <th style="padding:9px 10px;text-align:left;font-weight:700">UF</th>
+        <th style="padding:9px 10px;text-align:center;font-weight:700">Hospitais</th>
+        <th style="padding:9px 10px;text-align:center;font-weight:700">Registros</th>
+        <th style="padding:9px 10px;text-align:center;font-weight:700">Dentro SLA</th>
+        <th style="padding:9px 10px;text-align:center;font-weight:700">Fora SLA</th>
+        <th style="padding:9px 10px;text-align:center;font-weight:700">% SLA</th>
+        <th style="padding:9px 10px;text-align:center;font-weight:700">vs Meta (75%)</th>
+      </tr>
+    </thead>
+    <tbody>${tableRows}</tbody>
+  </table>
+</div>
+
+<!-- FOOTER -->
+<div style="border-top:1px solid #e2e8f0;padding-top:10px;display:flex;justify-content:space-between;color:#94a3b8;font-size:10px">
+  <span>Hapvida — Central Operacional | dashboard-operacional-hospitalar.vercel.app</span>
+  <span>SLA: 15min | Meta: 75% | Gerado em ${now}</span>
+</div>
+
+<div class="no-print" style="position:fixed;top:20px;right:20px">
+  <button onclick="window.print()" style="background:#1e3a8a;color:#fff;border:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer">🖨️ Imprimir / Salvar PDF</button>
+  <button onclick="window.close()" style="background:#e2e8f0;color:#374151;border:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;margin-left:8px">✕ Fechar</button>
+</div>
+</body>
+</html>`;
+
+    const win = window.open("", "_blank", "width=900,height=700");
+    if (win) { win.document.write(html); win.document.close(); }
+  }
+
+  function getMotivoObs(r: Registro): { motivo: string; obs: string; color: string; bg: string } {
+    const key = `${r.nm_local}|||${r.ds_especialidade}`;
+    const real = motivos[key];
+    if (real?.motivo) {
+      const m = real.motivo.trim();
+      const o = real.observacoes?.trim() || "—";
+      if (m.toLowerCase().includes("erro"))        return { motivo: m, obs: o, color: "#ef4444", bg: "rgba(239,68,68,0.10)" };
+      if (m.toLowerCase().includes("planejamento")) return { motivo: m, obs: o, color: "#f97316", bg: "rgba(249,115,22,0.10)" };
+      if (m.toLowerCase().includes("solucionado")) return { motivo: m, obs: o, color: "#22c55e", bg: "rgba(34,197,94,0.08)" };
+      return { motivo: m, obs: o, color: "#60a5fa", bg: "rgba(96,165,250,0.08)" };
+    }
+    // Sem dado real — exibe vazio
+    return { motivo: "—", obs: "—", color: "#334155", bg: "transparent" };
   }
 
   function SortTh({ col, label }: { col: "tempo_espera_min" | "qt_pacientes_aguardando" | "nm_local"; label: string }) {
@@ -394,7 +643,7 @@ export default function Dashboard() {
               <Menu size={16} />
             </button>
             <div>
-              <h1 className="text-lg font-black tracking-tight">Central Operacional — Tempo de Espera Médica</h1>
+              <h1 className="text-lg font-black tracking-tight">Central Operacional — Tempo de Espera Emergência</h1>
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" style={{ boxShadow: "0 0 8px rgba(74,222,128,.9)" }} />
                 <span className="text-xs text-slate-400">Atualizado: {loading ? "carregando..." : lastUpdate}</span>
@@ -587,29 +836,50 @@ export default function Dashboard() {
                   <table className="w-full">
                     <thead>
                       <tr className="border-b border-white/5">
-                        <th className="text-left pb-3 pr-4 text-xs text-slate-400 font-medium">UF</th>
+                        <th className="text-left pb-3 pr-3 text-xs text-slate-400 font-medium">UF</th>
                         <SortTh col="nm_local" label="Unidade" />
-                        <th className="text-left pb-3 pr-4 text-xs text-slate-400 font-medium">Especialidade</th>
-                        <SortTh col="qt_pacientes_aguardando" label="Aguardando" />
+                        <th className="text-left pb-3 pr-3 text-xs text-slate-400 font-medium">Especialidade</th>
+                        <SortTh col="qt_pacientes_aguardando" label="Aguard." />
                         <SortTh col="tempo_espera_min" label="Tempo Espera" />
-                        <th className="text-left pb-3 pr-4 text-xs text-slate-400 font-medium">Atraso</th>
-                        <th className="text-left pb-3 pr-4 text-xs text-slate-400 font-medium">Status</th>
+                        {/* Colunas em destaque */}
+                        <th className="text-left pb-3 pr-3 text-xs font-bold uppercase tracking-wider" style={{ color: "#f59e0b" }}>Motivo</th>
+                        <th className="text-left pb-3 pr-3 text-xs font-bold uppercase tracking-wider" style={{ color: "#60a5fa" }}>Observações</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {paginated.map(r => (
-                        <tr key={r.id} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
-                          <td className="py-2 pr-4 text-xs font-bold text-slate-300">{r.uf}</td>
-                          <td className="py-2 pr-4 text-xs max-w-48 truncate" title={r.nm_local}>{r.nm_local}</td>
-                          <td className="py-2 pr-4 text-xs text-slate-400 max-w-36 truncate" title={r.ds_especialidade}>{r.ds_especialidade}</td>
-                          <td className="py-2 pr-4 text-xs text-center">{r.qt_pacientes_aguardando}</td>
-                          <td className="py-2 pr-4 text-sm font-bold" style={{ color: statusColor(r.tempo_espera_min) }}>{minToHM(r.tempo_espera_min)}</td>
-                          <td className="py-2 pr-4 text-xs" style={{ color: r.atraso === "SIM" ? "#f97316" : r.atraso === "FALTA" ? "#ef4444" : "#94a3b8" }}>{r.tempo_atraso_min !== null ? minToHM(r.tempo_atraso_min) : r.atraso}</td>
-                          <td className="py-2 pr-4">
-                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusBg(r.tempo_espera_min)}`}>{statusLabel(r.tempo_espera_min)}</span>
-                          </td>
-                        </tr>
-                      ))}
+                      {paginated.map(r => {
+                        const { motivo, obs, color, bg } = getMotivoObs(r);
+                        const temMotivo = motivo !== "—";
+                        return (
+                          <tr key={r.id} className="border-b border-white/[0.03] hover:bg-white/[0.02]"
+                            style={{ background: temMotivo ? bg : "transparent" }}>
+                            <td className="py-2.5 pr-3 text-xs font-bold text-slate-300">{r.uf}</td>
+                            <td className="py-2.5 pr-3 text-xs max-w-44 truncate" title={r.nm_local}>{r.nm_local}</td>
+                            <td className="py-2.5 pr-3 text-xs text-slate-400 max-w-32 truncate" title={r.ds_especialidade}>{r.ds_especialidade}</td>
+                            <td className="py-2.5 pr-3 text-xs text-center font-medium">{r.qt_pacientes_aguardando}</td>
+                            {/* Tempo Espera em destaque */}
+                            <td className="py-2.5 pr-3">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-base font-black" style={{ color: statusColor(r.tempo_espera_min) }}>{minToHM(r.tempo_espera_min)}</span>
+                                <span className={`text-xs px-1.5 py-0.5 rounded-full ${statusBg(r.tempo_espera_min)}`}>{statusLabel(r.tempo_espera_min)}</span>
+                              </div>
+                            </td>
+                            {/* Motivo em destaque */}
+                            <td className="py-2.5 pr-3">
+                              {temMotivo ? (
+                                <span className="inline-flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-lg whitespace-nowrap"
+                                  style={{ color, background: `${color}20`, border: `1px solid ${color}30` }}>
+                                  ● {motivo}
+                                </span>
+                              ) : <span className="text-xs text-slate-600">—</span>}
+                            </td>
+                            {/* Observações em destaque */}
+                            <td className="py-2.5 pr-3 text-xs max-w-52" style={{ color: temMotivo ? "#cbd5e1" : "#475569" }}>
+                              {obs}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -678,28 +948,46 @@ export default function Dashboard() {
                   <table className="w-full">
                     <thead>
                       <tr className="border-b border-white/5">
-                        {["UF","Unidade","Especialidade","Médico","Aguard.","Espera","Atraso","Status"].map(h => (
-                          <th key={h} className="text-left pb-3 pr-4 text-xs text-slate-400 font-medium whitespace-nowrap">{h}</th>
-                        ))}
+                        <th className="text-left pb-3 pr-3 text-xs text-slate-400 font-medium whitespace-nowrap">UF</th>
+                        <th className="text-left pb-3 pr-3 text-xs text-slate-400 font-medium whitespace-nowrap">Unidade</th>
+                        <th className="text-left pb-3 pr-3 text-xs text-slate-400 font-medium whitespace-nowrap">Especialidade</th>
+                        <th className="text-left pb-3 pr-3 text-xs text-slate-400 font-medium whitespace-nowrap">Aguard.</th>
+                        <th className="text-left pb-3 pr-3 text-xs text-slate-400 font-medium whitespace-nowrap">Tempo Espera</th>
+                        <th className="text-left pb-3 pr-3 text-xs font-bold uppercase tracking-wider whitespace-nowrap" style={{ color: "#f59e0b" }}>Motivo</th>
+                        <th className="text-left pb-3 pr-3 text-xs font-bold uppercase tracking-wider whitespace-nowrap" style={{ color: "#60a5fa" }}>Observações</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {vivoFiltered.map(r => (
-                        <tr key={r.id} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
-                          <td className="py-2 pr-4 text-xs font-bold">{r.uf}</td>
-                          <td className="py-2 pr-4 text-xs max-w-40 truncate" title={r.nm_local}>{r.nm_local}</td>
-                          <td className="py-2 pr-4 text-xs text-slate-400 max-w-32 truncate">{r.ds_especialidade}</td>
-                          <td className="py-2 pr-4 text-xs text-slate-400 max-w-32 truncate">{r.nm_medico}</td>
-                          <td className="py-2 pr-4 text-xs text-center">{r.qt_pacientes_aguardando}</td>
-                          <td className="py-2 pr-4 text-sm font-black" style={{ color: statusColor(r.tempo_espera_min) }}>{minToHM(r.tempo_espera_min)}</td>
-                          <td className="py-2 pr-4 text-xs" style={{ color: r.atraso === "SIM" ? "#f97316" : r.atraso === "FALTA" ? "#ef4444" : "#64748b" }}>
-                            {r.tempo_atraso_min !== null ? minToHM(r.tempo_atraso_min) : r.atraso}
-                          </td>
-                          <td className="py-2 pr-4">
-                            <span className={`text-xs px-2 py-0.5 rounded-full ${statusBg(r.tempo_espera_min)}`}>{statusLabel(r.tempo_espera_min)}</span>
-                          </td>
-                        </tr>
-                      ))}
+                      {vivoFiltered.map(r => {
+                        const { motivo, obs, color, bg } = getMotivoObs(r);
+                        const temMotivo = motivo !== "—";
+                        return (
+                          <tr key={r.id} className="border-b border-white/[0.03] hover:bg-white/[0.02]"
+                            style={{ background: temMotivo ? bg : "transparent" }}>
+                            <td className="py-2.5 pr-3 text-xs font-bold">{r.uf}</td>
+                            <td className="py-2.5 pr-3 text-xs max-w-40 truncate" title={r.nm_local}>{r.nm_local}</td>
+                            <td className="py-2.5 pr-3 text-xs text-slate-400 max-w-32 truncate">{r.ds_especialidade}</td>
+                            <td className="py-2.5 pr-3 text-xs text-center">{r.qt_pacientes_aguardando}</td>
+                            <td className="py-2.5 pr-3">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-base font-black" style={{ color: statusColor(r.tempo_espera_min) }}>{minToHM(r.tempo_espera_min)}</span>
+                                <span className={`text-xs px-1.5 py-0.5 rounded-full ${statusBg(r.tempo_espera_min)}`}>{statusLabel(r.tempo_espera_min)}</span>
+                              </div>
+                            </td>
+                            <td className="py-2.5 pr-3">
+                              {temMotivo ? (
+                                <span className="inline-flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-lg whitespace-nowrap"
+                                  style={{ color, background: `${color}20`, border: `1px solid ${color}30` }}>
+                                  ● {motivo}
+                                </span>
+                              ) : <span className="text-xs text-slate-600">—</span>}
+                            </td>
+                            <td className="py-2.5 pr-3 text-xs max-w-52" style={{ color: temMotivo ? "#cbd5e1" : "#475569" }}>
+                              {obs}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -886,53 +1174,55 @@ export default function Dashboard() {
           {/* ── SLA & METAS ── */}
           {activeSection === "sla" && (
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h2 className="text-xl font-black">SLA & Metas</h2>
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="text-slate-400">Meta SLA:</span>
-                  {[15,30,45,60].map(v => (
-                    <button key={v} onClick={() => setSlaThreshold(v)}
-                      className="px-3 py-1.5 rounded-xl text-sm"
-                      style={{ background: slaThreshold === v ? "#2563EB" : "rgba(255,255,255,0.04)", color: slaThreshold === v ? "#fff" : "#94a3b8" }}>
-                      {v}min
-                    </button>
-                  ))}
+              {/* 8 KPI cards */}
+              <div className="flex items-center justify-between mb-1">
+                <div>
+                  <h2 className="text-xl font-black">SLA & Metas</h2>
+                  <p className="text-sm text-slate-400">Tempo de Espera Emergência · SLA 15min · Meta 75%</p>
+                </div>
+                <div className="flex gap-2">
+                  <div className="rounded-xl border border-blue-500/30 px-4 py-2 text-center" style={{ background: "rgba(37,99,235,0.08)" }}>
+                    <p className="text-xs text-slate-400 mb-0.5">SLA</p>
+                    <p className="text-xl font-black text-blue-400">15 min</p>
+                  </div>
+                  <div className="rounded-xl border border-green-500/30 px-4 py-2 text-center" style={{ background: "rgba(34,197,94,0.08)" }}>
+                    <p className="text-xs text-slate-400 mb-0.5">Meta</p>
+                    <p className="text-xl font-black text-green-400">75%</p>
+                  </div>
                 </div>
               </div>
-
-              {/* SLA cards */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className={`${card} col-span-1`} style={{ boxShadow: "0 16px 40px rgba(37,99,235,.12)" }}>
-                  <p className="text-sm text-slate-400 mb-2">Dentro do SLA (≤{slaThreshold}min)</p>
-                  <div className="flex items-end gap-2">
-                    <p className="text-4xl font-black text-green-400">{sla.pct}%</p>
-                    <p className="text-sm text-slate-400 mb-1">{sla.dentroSLA.toLocaleString("pt-BR")} registros</p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {[
+                  { label: "Tempo de Espera Emergência (%)", value: `${kpisSLA.pct}%`, sub: kpisSLA.pct >= 75 ? "✓ Meta atingida" : "✗ Abaixo da meta", color: kpisSLA.pct >= 75 ? "#22c55e" : "#ef4444", big: true },
+                  { label: "Meta Institucional", value: "75%", sub: "Pacientes em até 15min", color: "#60a5fa", big: false },
+                  { label: "Pacientes Dentro da Meta", value: kpisSLA.ok.toLocaleString("pt-BR"), sub: "tempo ≤ 15min", color: "#22c55e", big: false },
+                  { label: "Pacientes Fora da Meta", value: kpisSLA.fora.toLocaleString("pt-BR"), sub: "tempo > 15min", color: "#ef4444", big: false },
+                  { label: "Hospitais Dentro da Meta", value: kpisSLA.hospitaisOk.toString(), sub: "unidades OK", color: "#22c55e", big: false },
+                  { label: "Hospitais Fora da Meta", value: kpisSLA.hospitaisFora.toString(), sub: "unidades críticas", color: "#ef4444", big: false },
+                  { label: "Melhor UF", value: kpisSLA.melhorUF?.uf ?? "—", sub: `${kpisSLA.melhorUF?.pct ?? 0}% dentro da meta`, color: "#22c55e", big: false },
+                  { label: "Pior UF", value: kpisSLA.piorUF?.uf ?? "—", sub: `${kpisSLA.piorUF?.pct ?? 0}% dentro da meta`, color: "#ef4444", big: false },
+                ].map(({ label, value, sub, color, big }) => (
+                  <div key={label} className={card} style={{ borderColor: `${color}25`, gridColumn: big ? "span 2" : undefined }}>
+                    <p className="text-xs text-slate-400 mb-1">{label}</p>
+                    <p className={`font-black ${big ? "text-4xl" : "text-2xl"}`} style={{ color }}>{value}</p>
+                    <p className="text-xs mt-1" style={{ color: big ? color : "#64748b" }}>{sub}</p>
+                    {big && (
+                      <div className="mt-3 h-2 rounded-full bg-white/5 overflow-visible relative">
+                        <div className="h-full rounded-full" style={{ width: `${kpisSLA.pct}%`, background: kpisSLA.pct >= 75 ? "#22c55e" : "#ef4444" }} />
+                        <div className="absolute top-1/2 -translate-y-1/2 w-0.5 h-4 bg-white/50 rounded-full" style={{ left: "75%" }} />
+                      </div>
+                    )}
                   </div>
-                  <div className="h-2 rounded-full bg-white/5 mt-2 overflow-hidden">
-                    <div className="h-full rounded-full transition-all" style={{ width: `${sla.pct}%`, background: sla.pct >= 70 ? "#22c55e" : sla.pct >= 50 ? "#facc15" : "#ef4444" }} />
-                  </div>
-                </div>
-                <div className={card}>
-                  <p className="text-sm text-slate-400 mb-2">Fora do SLA (&gt;{slaThreshold}min)</p>
-                  <div className="flex items-end gap-2">
-                    <p className="text-4xl font-black text-red-400">{100-sla.pct}%</p>
-                    <p className="text-sm text-slate-400 mb-1">{sla.foraSLA.toLocaleString("pt-BR")} registros</p>
-                  </div>
-                </div>
-                <div className={card}>
-                  <p className="text-sm text-slate-400 mb-2">Estados acima da meta</p>
-                  <p className="text-4xl font-black text-orange-400">{sla.porUF.filter(u => u.pct < 70).length}</p>
-                  <p className="text-sm text-slate-400">{sla.porUF.filter(u => u.pct < 70).map(u => u.uf).slice(0,5).join(", ")}</p>
-                </div>
+                ))}
               </div>
 
               <div className={card2}>
-                <h3 className="text-base font-black mb-3">SLA por Estado</h3>
+                <h3 className="text-base font-black mb-3">SLA por Estado — Meta: 75% abaixo de {slaThreshold}min</h3>
                 <div className="overflow-x-auto">
                   <table className="w-full">
                     <thead>
                       <tr className="border-b border-white/5">
-                        {["UF","Hospitais","Registros","Dentro SLA","Fora SLA","% SLA","Semáforo"].map(h => (
+                        {["UF","Hospitais","Registros","Dentro SLA","Fora SLA","% SLA","vs Meta (75%)"].map(h => (
                           <th key={h} className="text-left pb-3 pr-4 text-xs text-slate-400 font-medium">{h}</th>
                         ))}
                       </tr>
@@ -945,10 +1235,16 @@ export default function Dashboard() {
                           <td className="py-2 pr-4 text-xs">{u.total.toLocaleString("pt-BR")}</td>
                           <td className="py-2 pr-4 text-xs text-green-400 font-bold">{u.ok.toLocaleString("pt-BR")}</td>
                           <td className="py-2 pr-4 text-xs text-red-400 font-bold">{(u.total - u.ok).toLocaleString("pt-BR")}</td>
-                          <td className="py-2 pr-4 text-sm font-black" style={{ color: u.pct >= 70 ? "#22c55e" : u.pct >= 50 ? "#facc15" : "#ef4444" }}>{u.pct}%</td>
+                          <td className="py-2 pr-4 text-sm font-black" style={{ color: u.pct >= SLA_META ? "#22c55e" : u.pct >= 50 ? "#facc15" : "#ef4444" }}>{u.pct}%</td>
                           <td className="py-2 pr-4">
-                            <div className="w-20 h-1.5 rounded-full bg-white/5 overflow-hidden">
-                              <div className="h-full rounded-full" style={{ width: `${u.pct}%`, background: u.pct >= 70 ? "#22c55e" : u.pct >= 50 ? "#facc15" : "#ef4444" }} />
+                            <div className="flex items-center gap-2">
+                              <div className="relative w-20 h-1.5 rounded-full bg-white/5 overflow-visible">
+                                <div className="h-full rounded-full" style={{ width: `${Math.min(100,u.pct)}%`, background: u.pct >= SLA_META ? "#22c55e" : u.pct >= 50 ? "#facc15" : "#ef4444" }} />
+                                <div className="absolute top-1/2 -translate-y-1/2 w-0.5 h-3 rounded-full bg-white/60" style={{ left: `${SLA_META}%` }} title="Meta 75%" />
+                              </div>
+                              <span className="text-xs font-bold" style={{ color: u.pct >= SLA_META ? "#22c55e" : "#ef4444" }}>
+                                {u.pct >= SLA_META ? "✓" : `${u.pct - SLA_META}%`}
+                              </span>
                             </div>
                           </td>
                         </tr>
@@ -1003,59 +1299,160 @@ export default function Dashboard() {
 
           {/* ── RELATÓRIOS ── */}
           {activeSection === "relatorios" && (
-            <div className="space-y-3">
-              <h2 className="text-xl font-black">Relatórios</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="space-y-4">
+              <div>
+                <h2 className="text-xl font-black">Área Analítica</h2>
+                <p className="text-sm text-slate-400 mt-0.5">Tempo de Espera Emergência · SLA 15min · Meta 75%</p>
+              </div>
+
+              {/* Resumo do dia */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {[
-                  { title: "Todos os Registros", desc: "Export completo da tabela espera com todos os campos", action: exportCSV, icon: FileText, color: "#2563EB" },
-                  { title: "Registros Críticos", desc: "Apenas registros com tempo de espera > 60 minutos", action: () => { const prev = searchQ; setSearchQ(""); setFilterStatus("Crítico"); setTimeout(() => { exportCSV(); setFilterStatus("Todos"); setSearchQ(prev); }, 100); }, icon: AlertTriangle, color: "#ef4444" },
-                  { title: "Por Estado (UF)", desc: "Resumo agregado por UF com médias e contagens", action: () => {
-                    const rows = porUF.map(u => `"${u.uf}","${u.hospitais}","${u.count}","${u.media}","${u.critico}","${u.grave}","${u.atencao}","${u.normal}"`);
-                    const csv = `"UF","Hospitais","Registros","Tempo Médio (min)","Crítico","Grave","Atenção","Normal"\n${rows.join("\n")}`;
-                    const blob = new Blob([csv], { type: "text/csv" });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement("a");
-                    a.href = url; a.download = `hapvida-por-uf.csv`; a.click(); URL.revokeObjectURL(url);
-                  }, icon: Map, color: "#22c55e" },
-                  { title: "Por Especialidade", desc: "Resumo de tempo médio e críticos por especialidade", action: () => {
-                    const rows = porEsp.map(e => `"${e.esp}","${e.count}","${e.media}","${e.critico}"`);
-                    const csv = `"Especialidade","Registros","Tempo Médio (min)","Críticos"\n${rows.join("\n")}`;
-                    const blob = new Blob([csv], { type: "text/csv" });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement("a");
-                    a.href = url; a.download = `hapvida-especialidades.csv`; a.click(); URL.revokeObjectURL(url);
-                  }, icon: Stethoscope, color: "#8B5CF6" },
-                  { title: "Evolução por Hora", desc: "Tempo médio de espera agrupado por hora do dia", action: () => {
-                    const rows = porHora.map(h => `"${h.hora}","${h.media}","${h.registros}"`);
-                    const csv = `"Hora","Tempo Médio (min)","Registros"\n${rows.join("\n")}`;
-                    const blob = new Blob([csv], { type: "text/csv" });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement("a");
-                    a.href = url; a.download = `hapvida-por-hora.csv`; a.click(); URL.revokeObjectURL(url);
-                  }, icon: BarChart2, color: "#F59E0B" },
-                  { title: "SLA por UF", desc: `Porcentagem de registros dentro da meta de ${slaThreshold}min por estado`, action: () => {
-                    const rows = sla.porUF.map(u => `"${u.uf}","${u.total}","${u.ok}","${u.total-u.ok}","${u.pct}%"`);
-                    const csv = `"UF","Total","Dentro SLA","Fora SLA","% SLA"\n${rows.join("\n")}`;
-                    const blob = new Blob([csv], { type: "text/csv" });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement("a");
-                    a.href = url; a.download = `hapvida-sla.csv`; a.click(); URL.revokeObjectURL(url);
-                  }, icon: TrendingUp, color: "#22c55e" },
-                ].map(({ title, desc, action, icon: Icon, color }) => (
-                  <button key={title} onClick={action}
-                    className="text-left rounded-2xl border border-white/5 p-5 hover:border-white/10 hover:bg-white/[0.02] transition-all group"
-                    style={{ background: "#06111F" }}>
-                    <div className="w-11 h-11 rounded-xl flex items-center justify-center mb-3" style={{ background: `${color}20` }}>
-                      <Icon size={20} style={{ color }} />
+                  { label: "Indicador Geral", value: `${kpisSLA.pct}%`, sub: `Meta: 75%`, color: kpisSLA.pct >= 75 ? "#22c55e" : "#ef4444", icon: ShieldAlert },
+                  { label: "Dentro da Meta (≤15min)", value: kpisSLA.ok.toLocaleString("pt-BR"), sub: "pacientes", color: "#22c55e", icon: CheckCircle2 },
+                  { label: "Fora da Meta (>15min)", value: kpisSLA.fora.toLocaleString("pt-BR"), sub: "pacientes", color: "#ef4444", icon: AlertTriangle },
+                  { label: "Total Atendimentos", value: kpisSLA.total.toLocaleString("pt-BR"), sub: "registros", color: "#60a5fa", icon: Users },
+                ].map(({ label, value, sub, color, icon: Icon }) => (
+                  <div key={label} className={card} style={{ borderColor: `${color}25` }}>
+                    <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-2" style={{ background: `${color}18` }}>
+                      <Icon size={16} style={{ color }} />
                     </div>
-                    <p className="text-base font-black mb-1">{title}</p>
-                    <p className="text-xs text-slate-400">{desc}</p>
-                    <div className="flex items-center gap-1.5 mt-3 text-xs" style={{ color }}>
-                      <Download size={12} />
-                      <span>Baixar CSV</span>
-                    </div>
-                  </button>
+                    <p className="text-xs text-slate-400 mb-0.5">{label}</p>
+                    <p className="text-2xl font-black" style={{ color }}>{value}</p>
+                    <p className="text-xs text-slate-500">{sub}</p>
+                  </div>
                 ))}
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {[
+                  { label: "Hospitais Dentro da Meta", value: kpisSLA.hospitaisOk, color: "#22c55e" },
+                  { label: "Hospitais Fora da Meta",   value: kpisSLA.hospitaisFora, color: "#ef4444" },
+                  { label: "Melhor UF", value: kpisSLA.melhorUF ? `${kpisSLA.melhorUF.uf} · ${kpisSLA.melhorUF.pct}%` : "—", color: "#22c55e" },
+                  { label: "Pior UF",   value: kpisSLA.piorUF   ? `${kpisSLA.piorUF.uf} · ${kpisSLA.piorUF.pct}%`   : "—", color: "#ef4444" },
+                ].map(({ label, value, color }) => (
+                  <div key={label} className={card}>
+                    <p className="text-xs text-slate-400 mb-1">{label}</p>
+                    <p className="text-xl font-black" style={{ color }}>{value}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Evolução do SLA por hora */}
+              <div className={card2}>
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h3 className="text-base font-black">Evolução do SLA — Tempo de Espera Emergência</h3>
+                    <p className="text-xs text-slate-400">% de pacientes atendidos em até 15min por hora · linha vermelha = meta 75%</p>
+                  </div>
+                  <span className="text-xs px-2 py-1 rounded-full font-bold" style={{ background: kpisSLA.pct >= 75 ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)", color: kpisSLA.pct >= 75 ? "#22c55e" : "#ef4444" }}>
+                    {kpisSLA.pct >= 75 ? "✓ Meta atingida" : "✗ Abaixo da meta"} · {kpisSLA.pct}%
+                  </span>
+                </div>
+                <ResponsiveContainer width="100%" height={220}>
+                  <LineChart data={slaByHora}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                    <XAxis dataKey="hora" tick={{ fill: "#64748b", fontSize: 11 }} />
+                    <YAxis domain={[0,100]} tick={{ fill: "#64748b", fontSize: 11 }} tickFormatter={v => `${v}%`} />
+                    <Tooltip contentStyle={{ background: "#0F172A", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8 }}
+                      formatter={(v, name) => [name === "meta" ? "75%" : `${v}%`, name === "meta" ? "Meta" : "SLA"]} />
+                    <Line type="monotone" dataKey="meta" stroke="#ef4444" strokeWidth={1.5} strokeDasharray="6 3" dot={false} />
+                    <Line type="monotone" dataKey="pct" stroke="#2563EB" strokeWidth={2.5} dot={{ fill: "#2563EB", r: 4 }}
+                      activeDot={{ r: 6 }} name="SLA" />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div className="grid grid-cols-12 gap-3">
+                {/* Relatório Diário */}
+                <div className={`${card2} col-span-12 md:col-span-4`}>
+                  <h3 className="text-base font-black mb-1">Relatório Diário</h3>
+                  <p className="text-xs text-slate-400 mb-3">Visão D-1 · dados do dia atual</p>
+                  <div className="space-y-3">
+                    <div className="p-3 rounded-xl border border-white/5" style={{ background: "#030D1A" }}>
+                      <p className="text-xs text-slate-400 mb-1">Indicador do dia</p>
+                      <p className="text-3xl font-black" style={{ color: kpisSLA.pct >= 75 ? "#22c55e" : "#ef4444" }}>{kpisSLA.pct}%</p>
+                      <p className="text-xs text-slate-500 mt-1">{kpisSLA.pct >= 75 ? "✓ Dentro da meta" : "✗ Fora da meta"}</p>
+                    </div>
+                    {[
+                      { l: "Total de atendimentos", v: kpisSLA.total.toLocaleString("pt-BR") },
+                      { l: "Dentro da meta (≤15min)", v: kpisSLA.ok.toLocaleString("pt-BR"), c: "#22c55e" },
+                      { l: "Fora da meta (>15min)", v: kpisSLA.fora.toLocaleString("pt-BR"), c: "#ef4444" },
+                      { l: "Meta institucional", v: "75%", c: "#60a5fa" },
+                    ].map(({ l, v, c }) => (
+                      <div key={l} className="flex justify-between items-center py-1.5 border-b border-white/5">
+                        <span className="text-xs text-slate-400">{l}</span>
+                        <span className="text-sm font-bold" style={{ color: c ?? "#fff" }}>{v}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Relatório Semanal / por turno */}
+                <div className={`${card2} col-span-12 md:col-span-8`}>
+                  <h3 className="text-base font-black mb-1">Relatório por Período</h3>
+                  <p className="text-xs text-slate-400 mb-3">SLA (%) por período do dia · linha vermelha = meta 75%</p>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={slaByHora}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                      <XAxis dataKey="hora" tick={{ fill: "#64748b", fontSize: 11 }} />
+                      <YAxis domain={[0,100]} tick={{ fill: "#64748b", fontSize: 11 }} tickFormatter={v => `${v}%`} />
+                      <Tooltip contentStyle={{ background: "#0F172A", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8 }}
+                        formatter={(v) => [`${v}%`, "SLA"]} />
+                      <Bar dataKey="pct" radius={[4,4,0,0]} maxBarSize={40}>
+                        {slaByHora.map(d => <Cell key={d.hora} fill={d.pct >= 75 ? "#22c55e" : "#ef4444"} />)}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              {/* Performance por UF */}
+              <div className={card2}>
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h3 className="text-base font-black">Performance por UF</h3>
+                    <p className="text-xs text-slate-400">SLA (%) por estado · ordenado do melhor para o pior</p>
+                  </div>
+                  <div className="flex gap-3 text-xs">
+                    <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: "#22c55e" }} />≥75% (meta)</span>
+                    <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: "#ef4444" }} />&lt;75%</span>
+                  </div>
+                </div>
+                <ResponsiveContainer width="100%" height={Math.max(280, ufSLAAnalitico.length * 26)}>
+                  <BarChart data={ufSLAAnalitico} layout="vertical" margin={{ left: 10, right: 50 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" horizontal={false} />
+                    <XAxis type="number" domain={[0,100]} tick={{ fill: "#64748b", fontSize: 10 }} tickFormatter={v => `${v}%`} />
+                    <YAxis type="category" dataKey="uf" tick={{ fill: "#94a3b8", fontSize: 11 }} width={28} />
+                    <Tooltip contentStyle={{ background: "#0F172A", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8 }}
+                      formatter={(v) => [`${v}%`, "SLA"]} />
+                    <Bar dataKey="pct" radius={[0,4,4,0]} label={{ position: "right", fontSize: 10, fill: "#94a3b8", formatter: (v) => `${Number(v)}%` }}>
+                      {ufSLAAnalitico.map(d => <Cell key={d.uf} fill={d.pct >= 75 ? "#22c55e" : "#ef4444"} />)}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Performance por Especialidade */}
+              <div className={card2}>
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h3 className="text-base font-black">Performance por Especialidade</h3>
+                    <p className="text-xs text-slate-400">SLA (%) por especialidade · verde = dentro da meta · vermelho = fora</p>
+                  </div>
+                </div>
+                <ResponsiveContainer width="100%" height={Math.max(320, Math.min(espSLAAnalitico.length, 20) * 28)}>
+                  <BarChart data={espSLAAnalitico.slice(0, 20)} layout="vertical" margin={{ left: 10, right: 50 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" horizontal={false} />
+                    <XAxis type="number" domain={[0,100]} tick={{ fill: "#64748b", fontSize: 10 }} tickFormatter={v => `${v}%`} />
+                    <YAxis type="category" dataKey="esp" tick={{ fill: "#94a3b8", fontSize: 10 }} width={160} tickFormatter={v => v.length > 22 ? v.slice(0,20)+"…" : v} />
+                    <Tooltip contentStyle={{ background: "#0F172A", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8 }}
+                      formatter={(v) => [`${v}%`, "SLA"]} />
+                    <Bar dataKey="pct" radius={[0,4,4,0]} label={{ position: "right", fontSize: 10, fill: "#94a3b8", formatter: (v) => `${Number(v)}%` }}>
+                      {espSLAAnalitico.slice(0,20).map(d => <Cell key={d.esp} fill={d.pct >= 75 ? "#22c55e" : "#ef4444"} />)}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
             </div>
           )}
@@ -1094,20 +1491,25 @@ export default function Dashboard() {
                   )
                 },
                 {
-                  title: "Meta de SLA",
-                  desc: "Define o limiar de tempo de espera para cálculo do SLA",
+                  title: "Definição de SLA",
+                  desc: "Parâmetros de SLA conforme regra de negócio da Hapvida",
                   content: (
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-slate-400 w-40">Threshold (minutos)</span>
-                      <div className="flex gap-1.5">
-                        {[15,20,30,45,60].map(v => (
-                          <button key={v} onClick={() => setSlaThreshold(v)}
-                            className="px-3 py-1.5 rounded-xl text-xs"
-                            style={{ background: slaThreshold === v ? "#2563EB" : "rgba(255,255,255,0.05)", color: slaThreshold === v ? "#fff" : "#94a3b8" }}>
-                            {v}min
-                          </button>
-                        ))}
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className="rounded-xl border border-white/10 p-3 text-center" style={{ background: "#030D1A" }}>
+                          <p className="text-xs text-slate-400 mb-1">Processo</p>
+                          <p className="text-sm font-black">Tempo de Espera Emergência</p>
+                        </div>
+                        <div className="rounded-xl border border-blue-500/30 p-3 text-center" style={{ background: "rgba(37,99,235,0.08)" }}>
+                          <p className="text-xs text-slate-400 mb-1">SLA</p>
+                          <p className="text-2xl font-black text-blue-400">15 min</p>
+                        </div>
+                        <div className="rounded-xl border border-green-500/30 p-3 text-center" style={{ background: "rgba(34,197,94,0.08)" }}>
+                          <p className="text-xs text-slate-400 mb-1">Meta</p>
+                          <p className="text-2xl font-black text-green-400">75% &lt; 15m</p>
+                        </div>
                       </div>
+                      <p className="text-xs text-slate-500">Estes valores são definidos pela regra de negócio e refletidos automaticamente na seção SLA & Metas.</p>
                     </div>
                   )
                 },
