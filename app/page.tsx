@@ -19,17 +19,15 @@ const sb = createClient(
   "https://fwdvzsywudpieqlqnxkp.supabase.co",
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ3ZHZ6c3l3dWRwaWVxbHFueGtwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg1ODcyNzEsImV4cCI6MjA5NDE2MzI3MX0.SkyfE_HVulz_TyQldI6XpENSJAuu6xDgUEDz4vObKYQ"
 );
-const SLA_MIN = 15;
-const SLA_META = 75;
+
+function minToHM(min: number) {
+  if (!min && min !== 0) return "—";
+  const h = Math.floor(Math.abs(min) / 60);
+  const m = Math.abs(min) % 60;
+  return `${h.toString().padStart(2,"0")}:${m.toString().padStart(2,"0")}`;
+}
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
-interface RegistroEspera {
-  id: number; uf: string; nm_local: string; nm_medico: string;
-  ds_especialidade: string; cidade: string; qt_pacientes_aguardando: number;
-  tempo_espera_min: number; tempo_atraso_min: number | null;
-  status: string; atraso: string; hr_registro_espera_min: number;
-  data_agenda: string; dt_registro: string;
-}
 interface DashData {
   resumo: {
     totalRegistros: number; totalAguardando: number; totalAtendimento: number;
@@ -39,21 +37,7 @@ interface DashData {
     slaPct: number; slaOk: number; slaFora: number;
   };
   top10: any[]; hospitais: any[]; atualizadoEm: string;
-  rawData: RegistroEspera[];
-}
-
-// ─── HELPERS ─────────────────────────────────────────────────────────────────
-function minToHM(min: number) {
-  if (!min && min !== 0) return "—";
-  const h = Math.floor(Math.abs(min) / 60);
-  const m = Math.abs(min) % 60;
-  return `${h.toString().padStart(2,"0")}:${m.toString().padStart(2,"0")}`;
-}
-function statusColor(min: number) {
-  if (min > 60) return "#ef4444";
-  if (min > 30) return "#fb923c";
-  if (min > 15) return "#facc15";
-  return "#22c55e";
+  turno?: string; data?: string;
 }
 
 // ─── MOCK DATA ────────────────────────────────────────────────────────────────
@@ -120,6 +104,28 @@ const ufData = [
   {uf:"AM",hospitais:2,agu:9,criticos:0,med:"00:21",status:"Normal"},
   {uf:"PA",hospitais:2,agu:7,criticos:0,med:"00:19",status:"Normal"},
 ];
+// Dados para SLA & Metas (regra: 15min / 75%)
+const slaData = [
+  {esp:"Traumatologia",meta:75,real:71,trend:-5},
+  {esp:"Oftalmologia",meta:75,real:68,trend:-12},
+  {esp:"Ginecologia",meta:75,real:63,trend:2},
+  {esp:"Ortopedia",meta:75,real:55,trend:4},
+  {esp:"Obstetrícia",meta:75,real:48,trend:6},
+  {esp:"Clínica Médica",meta:75,real:42,trend:8},
+  {esp:"Pediatria",meta:75,real:35,trend:3},
+];
+const slaHist = [
+  {mes:"Nov",sla:41},{mes:"Dez",sla:38},{mes:"Jan",sla:43},
+  {mes:"Fev",sla:40},{mes:"Mar",sla:45},{mes:"Abr",sla:42},{mes:"Mai",sla:46},
+];
+// Dados para gráficos dos Relatórios
+const relDiario = [{h:"06h",v:55},{h:"07h",v:60},{h:"08h",v:48},{h:"09h",v:42},{h:"10h",v:38},{h:"11h",v:35},{h:"12h",v:40},{h:"13h",v:44},{h:"14h",v:46},{h:"15h",v:46}];
+const relSemanal = [{d:"Seg",v:52},{d:"Ter",v:48},{d:"Qua",v:55},{d:"Qui",v:43},{d:"Sex",v:46},{d:"Sáb",v:60},{d:"Dom",v:58}];
+const relMensal = [{s:"S1",v:48},{s:"S2",v:43},{s:"S3",v:46},{s:"S4",v:42}];
+const relSLAHosp = [{n:"MG",v:78},{n:"GO",v:74},{n:"RJ",v:68},{n:"CE",v:55},{n:"PE",v:48},{n:"SP",v:42},{n:"BA",v:35},{n:"PI",v:28}];
+const relUFRank = [{n:"MG",v:78},{n:"GO",v:74},{n:"RJ",v:68},{n:"CE",v:55},{n:"PE",v:48},{n:"SP",v:42}];
+const relEsp = [{n:"Traum.",v:71},{n:"Oftal.",v:68},{n:"Ginec.",v:63},{n:"Ortop.",v:55},{n:"Obst.",v:48},{n:"Clín.",v:42},{n:"Ped.",v:35}];
+
 const alertasInit = [
   {id:1,tipo:"Crítico",msg:"Hospital Rio Poty - PI: tempo de espera 4h53 — maior da rede",hora:"15:24",lido:false},
   {id:2,tipo:"Crítico",msg:"Hospital Teresa - BA: 6 pacientes aguardando sem atendimento",hora:"15:21",lido:false},
@@ -224,21 +230,21 @@ function VGeral({ac,sac,dash}:any) {
     {name:"Crítico",value:r.criticos,pct:`${Math.round(r.criticos/tot*100)}%`,color:"#ef4444"},
   ] : donutDataMock;
   const totalDonut = r?.totalRegistros || 327;
-  // ── MUDANÇA 3: KPI SLA agora usa regra 15min/75% ──
+  // ── SLA Emergência: regra 15min / 75% ──
   const slaPct = r?.slaPct ?? 68;
-  const slaLabel = slaPct >= SLA_META ? "✓ Meta atingida" : `✗ Abaixo de ${SLA_META}%`;
-  const slaColor = slaPct >= SLA_META ? "#22C55E" : "#EF4444";
+  const slaOk  = slaPct >= 75;
+  const slaColor = slaOk ? "#22C55E" : "#EF4444";
 
   return (
     <>
       <div className="grid grid-cols-6 gap-3 mb-3">
-        <KPI title="Pacientes Aguardando" value={String(r?.totalAguardando??327)} trend="12%" sub="vs último período" color="#8B5CF6" icon={<Hospital size={20}/>}/>
-        <KPI title="Em Atendimento" value={String(r?.totalAtendimento??184)} trend="8%" sub="vs último período" color="#3B82F6" icon={<Activity size={20}/>}/>
-        <KPI title="Tempo Médio" value={r?.tempoMedioFormatado??"00:28"} trend="SLA: 15min" sub="meta: ≤15min" color="#F59E0B" icon={<Clock3 size={20}/>}/>
-        <KPI title="Maior Espera" value={r?.maiorEspera??"04:53"} trend={r?.maiorEsperaUnidade??"Rio Poty"} sub={r?.maiorEsperaUF??"PI"} color="#EF4444" icon={<ShieldAlert size={20}/>}/>
-        <KPI title="Hospitais Críticos" value={String(r?.criticos??14)} trend="3 novos" sub="críticos" color="#EF4444" icon={<Bell size={20}/>}/>
-        {/* MUDANÇA 1: SLA agora é Emergência ≤15min com meta 75% */}
-        <KPI title="SLA Emergência ≤15min" value={`${slaPct}%`} trend={slaLabel} sub="meta: 75%" color={slaColor} icon={<ShieldAlert size={20}/>}/>
+        <KPI title="Pacientes Aguardando" value={String(r?.totalAguardando??327)}   trend="12%"      sub="vs último período" color="#8B5CF6" icon={<Hospital size={20}/>}/>
+        <KPI title="Em Atendimento"       value={String(r?.totalAtendimento??184)}  trend="8%"       sub="vs último período" color="#3B82F6" icon={<Activity size={20}/>}/>
+        <KPI title="Tempo Médio"          value={r?.tempoMedioFormatado??"00:28"}   trend="5 min"    sub="vs último período" color="#F59E0B" icon={<Clock3 size={20}/>}/>
+        <KPI title="Maior Espera"         value={r?.maiorEspera??"04:53"}           trend={r?.maiorEsperaUnidade??"Rio Poty"} sub={r?.maiorEsperaUF??"PI"} color="#EF4444" icon={<ShieldAlert size={20}/>}/>
+        <KPI title="Hospitais Críticos"   value={String(r?.criticos??14)}           trend="3 novos"  sub="críticos"          color="#EF4444" icon={<Bell size={20}/>}/>
+        {/* MUDANÇA: SLA agora usa regra Emergência ≤15min / meta 75% */}
+        <KPI title="SLA Emergência ≤15min" value={`${slaPct}%`} trend={slaOk?"✓ Meta 75% atingida":"✗ Abaixo de 75%"} sub="meta: 75%" color={slaColor} icon={<ShieldAlert size={20}/>}/>
       </div>
       <div className="grid grid-cols-12 gap-3 mb-3">
         <Card className="col-span-4 relative overflow-hidden">
@@ -516,257 +522,75 @@ function VEstados() {
   );
 }
 
-// ── MUDANÇA 2: VSLA — 8 cards com regra 15min/75% ────────────────────────────
+// ── MUDANÇA: VSLA — mesma estrutura, nova regra 15min / 75% ──────────────────
 function VSLA({dash}:any) {
   const r = dash?.resumo;
-  const slaPct = r?.slaPct ?? 46;
-  const slaOk  = r?.slaOk  ?? 0;
-  const slaFora= r?.slaFora ?? 0;
-  const total  = r?.totalRegistros ?? 327;
-  const melhorUF = "MG"; const piorUF = "PI";
-  const hospOk  = 33; const hospFora = 14;
-  const metaAtingida = slaPct >= SLA_META;
-  const slaHistData = [
-    {mes:"Nov",sla:41},{mes:"Dez",sla:38},{mes:"Jan",sla:43},
-    {mes:"Fev",sla:40},{mes:"Mar",sla:45},{mes:"Abr",sla:42},{mes:"Mai",sla:slaPct},
-  ];
-  const porHoraData = [
-    {h:"06h",sla:55},{h:"07h",sla:60},{h:"08h",sla:48},{h:"09h",sla:42},
-    {h:"10h",sla:38},{h:"11h",sla:35},{h:"12h",sla:40},{h:"13h",sla:44},
-    {h:"14h",sla:slaPct},{h:"15h",sla:slaPct},
-  ];
+  const slaPct  = r?.slaPct  ?? 46;
+  const slaOk   = r?.slaOk   ?? 0;
+  const slaFora = r?.slaFora  ?? 0;
+  const metaOk  = slaPct >= 75;
   return (
     <>
       <Title t="SLA & Metas" s="Tempo de Espera Emergência · SLA 15min · Meta 75%"/>
-      {/* Definição do processo */}
-      <div className="grid grid-cols-3 gap-3 mb-4">
-        {[["Processo","Tempo de Espera Emergência","#94a3b8"],["SLA","15 minutos","#60a5fa"],["Meta","75% < 15min","#22c55e"]].map(([l,v,c])=>(
-          <Card key={l} className="text-center">
-            <p className="text-slate-400 text-[12px] mb-2">{l}</p>
-            <p className="text-[20px] font-black" style={{color:c as string}}>{v}</p>
+      <div className="grid grid-cols-4 gap-3 mb-3">
+        {[
+          {l:"SLA Emergência ≤15min", v:`${slaPct}%`,         m:"75%", ok:metaOk,         c:metaOk?"#22c55e":"#ef4444"},
+          {l:"Dentro da Meta",        v:slaOk.toLocaleString("pt-BR"), m:"pacientes ≤15min",ok:true,  c:"#22c55e"},
+          {l:"Fora da Meta",          v:slaFora.toLocaleString("pt-BR"),m:"pacientes >15min", ok:false, c:"#ef4444"},
+          {l:"Melhor UF",             v:"MG",                 m:"maior SLA",             ok:true,  c:"#22c55e"},
+        ].map((k,i)=>(
+          <Card key={i} className="text-center">
+            <p className="text-slate-400 text-[12px] mb-2">{k.l}</p>
+            <p className="text-[36px] font-black" style={{color:k.c}}>{k.v}</p>
+            <p className="text-slate-500 text-[11px] mt-1">Meta: {k.m}</p>
+            <div className={`mt-2 text-[11px] font-bold ${k.ok?"text-green-400":"text-red-400"}`}>{k.ok?"✓ Dentro da meta":"✗ Abaixo da meta"}</div>
           </Card>
         ))}
       </div>
-      {/* 8 KPI cards */}
-      <div className="grid grid-cols-4 gap-3 mb-4">
-        <Card className="col-span-2 relative overflow-hidden">
-          <div className="absolute inset-0 opacity-10 pointer-events-none" style={{background:`radial-gradient(circle at top right,${metaAtingida?"#22c55e":"#ef4444"},transparent 60%)`}}/>
-          <div className="relative z-10">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-slate-400 text-[13px]">Tempo de Espera Emergência (%)</p>
-              <span className="text-[11px] font-bold px-2 py-1 rounded-full" style={{background:metaAtingida?"rgba(34,197,94,.15)":"rgba(239,68,68,.15)",color:metaAtingida?"#22c55e":"#ef4444"}}>{metaAtingida?"✓ Meta atingida":"✗ Abaixo da meta"}</span>
-            </div>
-            <p className="text-[48px] font-black leading-none" style={{color:metaAtingida?"#22c55e":"#ef4444"}}>{slaPct}%</p>
-            <div className="mt-3 h-3 rounded-full relative overflow-hidden" style={{background:"rgba(255,255,255,.05)"}}>
-              <div className="h-full rounded-full" style={{width:`${slaPct}%`,background:metaAtingida?"#22c55e":"#ef4444"}}/>
-              <div className="absolute top-0 bottom-0 w-0.5 bg-white/60" style={{left:`${SLA_META}%`}}/>
-            </div>
-            <div className="flex justify-between mt-1 text-[10px] text-slate-500"><span>0%</span><span style={{color:"#94a3b8"}}>▲ Meta {SLA_META}%</span><span>100%</span></div>
-          </div>
-        </Card>
-        <Card className="text-center">
-          <p className="text-slate-400 text-[12px] mb-2">Meta Institucional</p>
-          <p className="text-[36px] font-black text-blue-400">75%</p>
-          <p className="text-slate-500 text-[11px] mt-1">Pacientes em até 15min</p>
-        </Card>
-        <Card className="text-center">
-          <p className="text-slate-400 text-[12px] mb-2">Total Analisado</p>
-          <p className="text-[36px] font-black text-white">{total.toLocaleString("pt-BR")}</p>
-          <p className="text-slate-500 text-[11px] mt-1">registros</p>
-        </Card>
-        <Card className="text-center">
-          <p className="text-slate-400 text-[12px] mb-2">Pacientes Dentro da Meta</p>
-          <p className="text-[36px] font-black text-green-400">{slaOk.toLocaleString("pt-BR")}</p>
-          <p className="text-slate-500 text-[11px] mt-1">tempo ≤ 15min</p>
-        </Card>
-        <Card className="text-center">
-          <p className="text-slate-400 text-[12px] mb-2">Pacientes Fora da Meta</p>
-          <p className="text-[36px] font-black text-red-400">{slaFora.toLocaleString("pt-BR")}</p>
-          <p className="text-slate-500 text-[11px] mt-1">tempo &gt; 15min</p>
-        </Card>
-        <Card className="text-center">
-          <p className="text-slate-400 text-[12px] mb-2">Hospitais Dentro da Meta</p>
-          <p className="text-[36px] font-black text-green-400">{hospOk}</p>
-          <p className="text-slate-500 text-[11px] mt-1">unidades OK</p>
-        </Card>
-        <Card className="text-center">
-          <p className="text-slate-400 text-[12px] mb-2">Hospitais Fora da Meta</p>
-          <p className="text-[36px] font-black text-red-400">{hospFora}</p>
-          <p className="text-slate-500 text-[11px] mt-1">unidades críticas</p>
-        </Card>
-        <Card className="text-center">
-          <p className="text-slate-400 text-[12px] mb-2">Melhor UF</p>
-          <p className="text-[36px] font-black text-green-400">{melhorUF}</p>
-          <p className="text-slate-500 text-[11px] mt-1">melhor indicador</p>
-        </Card>
-        <Card className="text-center">
-          <p className="text-slate-400 text-[12px] mb-2">Pior UF</p>
-          <p className="text-[36px] font-black text-red-400">{piorUF}</p>
-          <p className="text-slate-500 text-[11px] mt-1">precisa de atenção</p>
-        </Card>
-      </div>
-      {/* Gráficos */}
       <div className="grid grid-cols-12 gap-3 mb-3">
         <Card className="col-span-7">
-          <h2 className="text-[16px] font-black mb-3">Evolução do SLA — Histórico</h2>
+          <h2 className="text-[16px] font-black mb-3">SLA por Especialidade vs Meta (75%)</h2>
           <div className="h-[260px]">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={slaHistData} margin={{left:0,right:8}}>
-                <defs><linearGradient id="gS" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#3b82f6" stopOpacity={0.4}/><stop offset="100%" stopColor="#3b82f6" stopOpacity={0}/></linearGradient></defs>
-                <XAxis dataKey="mes" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}}/>
-                <YAxis stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}} domain={[0,100]} tickFormatter={v=>`${v}%`} width={40}/>
-                <Tooltip contentStyle={{background:"#081120",border:"1px solid rgba(255,255,255,.06)",borderRadius:"12px",color:"#fff",fontSize:12}} formatter={(v:any)=>[`${v}%`,"SLA"]}/>
-                {/* Linha da meta */}
-                <Line type="monotone" dataKey={()=>SLA_META} stroke="#ef4444" strokeWidth={1.5} strokeDasharray="6 3" dot={false} name="Meta 75%"/>
-                <Area type="monotone" dataKey="sla" stroke="#3b82f6" strokeWidth={2.5} fill="url(#gS)" dot={{r:4,fill:"#3b82f6"}} name="SLA"/>
-              </AreaChart>
+              <BarChart data={slaData} margin={{left:0,right:8}}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f"/>
+                <XAxis dataKey="esp" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:10,fill:"#64748b"}}/>
+                <YAxis stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}} domain={[0,100]} tickFormatter={v=>`${v}%`}/>
+                <Tooltip contentStyle={{background:"#081120",border:"1px solid rgba(255,255,255,.06)",borderRadius:"12px",color:"#fff",fontSize:12}}/>
+                <Bar dataKey="meta" fill="#1e3a5f" radius={[4,4,0,0]} name="Meta 75%"/>
+                <Bar dataKey="real" radius={[4,4,0,0]} name="Realizado">{slaData.map((d,i)=><Cell key={i} fill={d.real>=d.meta?"#22c55e":"#ef4444"}/>)}</Bar>
+              </BarChart>
             </ResponsiveContainer>
           </div>
         </Card>
         <Card className="col-span-5">
-          <h2 className="text-[16px] font-black mb-3">SLA por Período do Dia</h2>
+          <h2 className="text-[16px] font-black mb-3">Histórico SLA — 7 Meses</h2>
           <div className="h-[260px]">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={porHoraData} margin={{left:0,right:8}}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f"/>
-                <XAxis dataKey="h" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:10,fill:"#64748b"}}/>
-                <YAxis stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}} domain={[0,100]} tickFormatter={v=>`${v}%`} width={36}/>
-                <Tooltip contentStyle={{background:"#081120",border:"1px solid rgba(255,255,255,.06)",borderRadius:"12px",color:"#fff",fontSize:12}} formatter={(v:any)=>[`${v}%`,"SLA"]}/>
-                <Bar dataKey="sla" radius={[4,4,0,0]} name="SLA">{porHoraData.map((d,i)=><Cell key={i} fill={d.sla>=SLA_META?"#22c55e":"#ef4444"}/>)}</Bar>
-              </BarChart>
+              <AreaChart data={slaHist} margin={{left:0,right:8}}>
+                <defs><linearGradient id="gS" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#3b82f6" stopOpacity={0.4}/><stop offset="100%" stopColor="#3b82f6" stopOpacity={0}/></linearGradient></defs>
+                <XAxis dataKey="mes" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}}/>
+                <YAxis stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}} domain={[0,100]} tickFormatter={v=>`${v}%`} width={40}/>
+                <Tooltip contentStyle={{background:"#081120",border:"1px solid rgba(255,255,255,.06)",borderRadius:"12px",color:"#fff",fontSize:12}}/>
+                <Area type="monotone" dataKey="sla" stroke="#3b82f6" strokeWidth={2.5} fill="url(#gS)" dot={{r:4,fill:"#3b82f6"}}/>
+              </AreaChart>
             </ResponsiveContainer>
           </div>
         </Card>
       </div>
-    </>
-  );
-}
-
-// ── MUDANÇA 4: VRelatorios — Área Analítica com gráficos ─────────────────────
-function VRelatorios({dash}:any) {
-  const r = dash?.resumo;
-  const slaPct = r?.slaPct ?? 46;
-  const slaOk  = r?.slaOk ?? 0;
-  const slaFora= r?.slaFora ?? 0;
-  const total  = r?.totalRegistros ?? 327;
-  const metaAtingida = slaPct >= SLA_META;
-  const ufSLAData = ufData.map(u=>({uf:u.uf,sla:Math.max(10,Math.min(95,slaPct+(Math.random()*30-15)>>0)),meta:SLA_META}))
-    .sort((a,b)=>b.sla-a.sla);
-  const espSLAData = [
-    {esp:"Traumatologia",sla:71},{esp:"Oftalmologia",sla:68},{esp:"Ginecologia",sla:63},
-    {esp:"Ortopedia",sla:55},{esp:"Obstetrícia",sla:48},{esp:"Clínica Médica",sla:42},{esp:"Pediatria",sla:35},
-  ].sort((a,b)=>b.sla-a.sla);
-  const porHoraData = [
-    {h:"06h",sla:55},{h:"07h",sla:60},{h:"08h",sla:48},{h:"09h",sla:42},
-    {h:"10h",sla:38},{h:"11h",sla:35},{h:"12h",sla:40},{h:"13h",sla:44},
-    {h:"14h",sla:slaPct},{h:"15h",sla:slaPct},
-  ];
-  return (
-    <>
-      <Title t="Área Analítica" s="Tempo de Espera Emergência · SLA 15min · Meta 75%"/>
-      {/* Mini KPIs */}
-      <div className="grid grid-cols-4 gap-3 mb-4">
-        {[
-          {l:"Indicador Geral",v:`${slaPct}%`,c:metaAtingida?"#22c55e":"#ef4444",sub:`Meta: ${SLA_META}%`},
-          {l:"Dentro da Meta (≤15min)",v:slaOk.toLocaleString("pt-BR"),c:"#22c55e",sub:"pacientes"},
-          {l:"Fora da Meta (>15min)",v:slaFora.toLocaleString("pt-BR"),c:"#ef4444",sub:"pacientes"},
-          {l:"Total Registros",v:total.toLocaleString("pt-BR"),c:"#60a5fa",sub:"analisados"},
-        ].map(({l,v,c,sub})=>(
-          <Card key={l} className="text-center">
-            <p className="text-slate-400 text-[12px] mb-2">{l}</p>
-            <p className="text-[32px] font-black" style={{color:c}}>{v}</p>
-            <p className="text-slate-500 text-[11px] mt-1">{sub}</p>
-          </Card>
-        ))}
-      </div>
-      {/* Evolução SLA */}
-      <Card className="mb-3">
-        <div className="flex items-center justify-between mb-3">
-          <div><h2 className="text-[16px] font-black">Evolução do SLA — Tempo de Espera Emergência</h2><p className="text-slate-400 text-[12px]">% dentro da meta (≤15min) por hora · linha vermelha = meta 75%</p></div>
-          <span className="text-[11px] font-bold px-3 py-1.5 rounded-full" style={{background:metaAtingida?"rgba(34,197,94,.15)":"rgba(239,68,68,.15)",color:metaAtingida?"#22c55e":"#ef4444"}}>{metaAtingida?"✓ Meta atingida":"✗ Abaixo da meta"} · {slaPct}%</span>
-        </div>
-        <div className="h-[200px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={porHoraData} margin={{left:0,right:8}}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f"/>
-              <XAxis dataKey="h" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}}/>
-              <YAxis stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}} domain={[0,100]} tickFormatter={v=>`${v}%`} width={36}/>
-              <Tooltip contentStyle={{background:"#081120",border:"1px solid rgba(255,255,255,.06)",borderRadius:"12px",color:"#fff",fontSize:12}} formatter={(v:any,name:any)=>[`${v}%`,name==="meta"?"Meta":"SLA"]}/>
-              <Line type="monotone" dataKey={()=>SLA_META} stroke="#ef4444" strokeWidth={1.5} strokeDasharray="6 3" dot={false} name="meta"/>
-              <Line type="monotone" dataKey="sla" stroke="#2563EB" strokeWidth={2.5} dot={{r:4,fill:"#2563EB"}} activeDot={{r:6}} name="SLA"/>
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </Card>
-      {/* Relatório Diário + Período */}
-      <div className="grid grid-cols-12 gap-3 mb-3">
-        <Card className="col-span-4">
-          <h2 className="text-[16px] font-black mb-1">Relatório Diário</h2>
-          <p className="text-slate-400 text-[12px] mb-3">Visão D-1 · dados do dia atual</p>
-          <div className="space-y-3">
-            <div className="p-3 rounded-xl border border-white/[0.06] bg-[#030D1A]">
-              <p className="text-[12px] text-slate-400 mb-1">Indicador do dia</p>
-              <p className="text-[36px] font-black" style={{color:metaAtingida?"#22c55e":"#ef4444"}}>{slaPct}%</p>
-              <p className="text-[11px] text-slate-500 mt-1">{metaAtingida?"✓ Dentro da meta":"✗ Fora da meta"}</p>
-            </div>
-            {[{l:"Total de atendimentos",v:total.toLocaleString("pt-BR")},{l:"Dentro da meta (≤15min)",v:slaOk.toLocaleString("pt-BR"),c:"#22c55e"},{l:"Fora da meta (>15min)",v:slaFora.toLocaleString("pt-BR"),c:"#ef4444"},{l:"Meta institucional",v:"75%",c:"#60a5fa"}].map(({l,v,c})=>(
-              <div key={l} className="flex justify-between items-center py-1.5 border-b border-white/[0.04]">
-                <span className="text-[12px] text-slate-400">{l}</span>
-                <span className="text-[13px] font-bold" style={{color:c??"#fff"}}>{v}</span>
-              </div>
-            ))}
-          </div>
-        </Card>
-        <Card className="col-span-8">
-          <h2 className="text-[16px] font-black mb-1">SLA por Período</h2>
-          <p className="text-slate-400 text-[12px] mb-3">% dentro da meta (≤15min) · verde = atingiu · vermelho = abaixo</p>
-          <div className="h-[230px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={porHoraData} margin={{left:0,right:8}}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f"/>
-                <XAxis dataKey="h" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}}/>
-                <YAxis stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}} domain={[0,100]} tickFormatter={v=>`${v}%`} width={36}/>
-                <Tooltip contentStyle={{background:"#081120",border:"1px solid rgba(255,255,255,.06)",borderRadius:"12px",color:"#fff",fontSize:12}} formatter={(v:any)=>[`${v}%`,"SLA"]}/>
-                <Bar dataKey="sla" radius={[4,4,0,0]} name="SLA">{porHoraData.map((d,i)=><Cell key={i} fill={d.sla>=SLA_META?"#22c55e":"#ef4444"}/>)}</Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-      </div>
-      {/* Performance por UF */}
-      <Card className="mb-3">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-[16px] font-black">Performance por UF — do melhor ao pior</h2>
-          <div className="flex gap-3 text-[12px]">
-            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{background:"#22c55e"}}/> ≥75% (meta)</span>
-            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{background:"#ef4444"}}/> &lt;75%</span>
-          </div>
-        </div>
-        <div className="h-[220px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={ufSLAData} layout="vertical" margin={{left:8,right:50}}>
-              <XAxis type="number" domain={[0,100]} stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:10,fill:"#64748b"}} tickFormatter={v=>`${v}%`}/>
-              <YAxis dataKey="uf" type="category" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#94a3b8"}} width={28}/>
-              <Tooltip contentStyle={{background:"#081120",border:"1px solid rgba(255,255,255,.06)",borderRadius:"12px",color:"#fff",fontSize:12}} formatter={(v:any)=>[`${v}%`,"SLA"]}/>
-              <Bar dataKey="sla" radius={[0,4,4,0]} name="SLA">{ufSLAData.map((d,i)=><Cell key={i} fill={d.sla>=SLA_META?"#22c55e":"#ef4444"}/>)}</Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </Card>
-      {/* Performance por Especialidade */}
       <Card>
-        <h2 className="text-[16px] font-black mb-3">Performance por Especialidade</h2>
+        <h2 className="text-[16px] font-black mb-4">Detalhamento por Especialidade — Meta 75%</h2>
         <div className="space-y-4">
-          {espSLAData.map((d,i)=>(
+          {slaData.map((d,i)=>(
             <div key={i} className="flex items-center gap-4">
               <span className="text-[13px] w-32 text-slate-300">{d.esp}</span>
               <div className="flex-1 h-3 rounded-full bg-white/[0.05] overflow-hidden relative">
-                <div className="h-full rounded-full absolute top-0 left-0" style={{width:`${d.sla}%`,background:d.sla>=SLA_META?"#22c55e":"#ef4444",boxShadow:`0 0 10px ${d.sla>=SLA_META?"#22c55e":"#ef4444"}80`}}/>
-                <div className="absolute top-0 bottom-0 w-0.5 bg-white/40" style={{left:`${SLA_META}%`}}/>
+                <div className="h-full rounded-full" style={{width:`${d.meta}%`,background:"#1e3a5f"}}/>
+                <div className="h-full rounded-full absolute top-0 left-0" style={{width:`${d.real}%`,background:d.real>=d.meta?"#22c55e":"#ef4444",boxShadow:`0 0 10px ${d.real>=d.meta?"#22c55e":"#ef4444"}80`}}/>
               </div>
-              <span className="text-[13px] font-bold w-12 text-right" style={{color:d.sla>=SLA_META?"#22c55e":"#ef4444"}}>{d.sla}%</span>
-              <span className="text-[12px] text-slate-500 w-16">meta {SLA_META}%</span>
-              <span className={`text-[12px] font-bold w-16 ${d.sla>=SLA_META?"text-green-400":"text-red-400"}`}>{d.sla>=SLA_META?`+${d.sla-SLA_META}%`:`${d.sla-SLA_META}%`}</span>
+              <span className="text-[13px] font-bold w-12 text-right" style={{color:d.real>=d.meta?"#22c55e":"#ef4444"}}>{d.real}%</span>
+              <span className="text-[12px] text-slate-500 w-16">meta {d.meta}%</span>
+              <span className={`text-[12px] font-bold w-16 ${d.trend>0?"text-green-400":"text-red-400"}`}>{d.trend>0?`+${d.trend}%`:`${d.trend}%`}</span>
             </div>
           ))}
         </div>
@@ -811,6 +635,46 @@ function VAlertas() {
   );
 }
 
+// ── MUDANÇA: VRelatorios — mesmos 6 cards, mesmo grid, botão → mini gráfico ──
+function VRelatorios() {
+  const ttip = {contentStyle:{background:"#081120",border:"1px solid rgba(255,255,255,.06)",borderRadius:"8px",color:"#fff",fontSize:11}};
+  const cards = [
+    {titulo:"Relatório Diário",    desc:"SLA (%) por hora do dia",             icon:<FileText size={24}/>,   color:"#3b82f6", freq:"Diário",
+     chart:<AreaChart data={relDiario}><defs><linearGradient id="gD" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#3b82f6" stopOpacity={0.4}/><stop offset="100%" stopColor="#3b82f6" stopOpacity={0}/></linearGradient></defs><XAxis dataKey="h" tick={{fontSize:9,fill:"#64748b"}} axisLine={false} tickLine={false}/><YAxis domain={[0,100]} tick={{fontSize:9,fill:"#64748b"}} axisLine={false} tickLine={false} width={24} tickFormatter={v=>`${v}%`}/><Tooltip {...ttip}/><Area type="monotone" dataKey="v" stroke="#3b82f6" fill="url(#gD)" strokeWidth={1.5} dot={false}/></AreaChart>},
+    {titulo:"Relatório Semanal",   desc:"SLA (%) por dia da semana",           icon:<BarChart2 size={24}/>,  color:"#8b5cf6", freq:"Semanal",
+     chart:<BarChart data={relSemanal}><XAxis dataKey="d" tick={{fontSize:9,fill:"#64748b"}} axisLine={false} tickLine={false}/><YAxis domain={[0,100]} tick={{fontSize:9,fill:"#64748b"}} axisLine={false} tickLine={false} width={24} tickFormatter={v=>`${v}%`}/><Tooltip {...ttip}/><Bar dataKey="v" radius={[3,3,0,0]}>{relSemanal.map((d,i)=><Cell key={i} fill={d.v>=75?"#22c55e":"#8b5cf6"}/>)}</Bar></BarChart>},
+    {titulo:"Relatório Mensal",    desc:"SLA (%) por semana do mês",           icon:<PieIcon size={24}/>,    color:"#06b6d4", freq:"Mensal",
+     chart:<BarChart data={relMensal}><XAxis dataKey="s" tick={{fontSize:9,fill:"#64748b"}} axisLine={false} tickLine={false}/><YAxis domain={[0,100]} tick={{fontSize:9,fill:"#64748b"}} axisLine={false} tickLine={false} width={24} tickFormatter={v=>`${v}%`}/><Tooltip {...ttip}/><Bar dataKey="v" radius={[3,3,0,0]}>{relMensal.map((d,i)=><Cell key={i} fill={d.v>=75?"#22c55e":"#06b6d4"}/>)}</Bar></BarChart>},
+    {titulo:"SLA por Hospital",    desc:"SLA (%) por estado — meta 75%",       icon:<ShieldAlert size={24}/>,color:"#22c55e", freq:"Semanal",
+     chart:<BarChart data={relSLAHosp} layout="vertical"><XAxis type="number" domain={[0,100]} tick={{fontSize:9,fill:"#64748b"}} axisLine={false} tickLine={false} tickFormatter={v=>`${v}%`}/><YAxis dataKey="n" type="category" tick={{fontSize:9,fill:"#94a3b8"}} axisLine={false} tickLine={false} width={22}/><Tooltip {...ttip}/><Bar dataKey="v" radius={[0,3,3,0]}>{relSLAHosp.map((d,i)=><Cell key={i} fill={d.v>=75?"#22c55e":"#ef4444"}/>)}</Bar></BarChart>},
+    {titulo:"Ranking de UF",       desc:"Performance SLA por estado",          icon:<Map size={24}/>,        color:"#f59e0b", freq:"Mensal",
+     chart:<BarChart data={relUFRank}><XAxis dataKey="n" tick={{fontSize:9,fill:"#64748b"}} axisLine={false} tickLine={false}/><YAxis domain={[0,100]} tick={{fontSize:9,fill:"#64748b"}} axisLine={false} tickLine={false} width={24} tickFormatter={v=>`${v}%`}/><Tooltip {...ttip}/><Bar dataKey="v" radius={[3,3,0,0]}>{relUFRank.map((d,i)=><Cell key={i} fill={d.v>=75?"#22c55e":"#f59e0b"}/>)}</Bar></BarChart>},
+    {titulo:"Por Especialidade",   desc:"SLA (%) por área médica — meta 75%",  icon:<Stethoscope size={24}/>,color:"#ef4444", freq:"Semanal",
+     chart:<BarChart data={relEsp}><XAxis dataKey="n" tick={{fontSize:9,fill:"#64748b"}} axisLine={false} tickLine={false}/><YAxis domain={[0,100]} tick={{fontSize:9,fill:"#64748b"}} axisLine={false} tickLine={false} width={24} tickFormatter={v=>`${v}%`}/><Tooltip {...ttip}/><Bar dataKey="v" radius={[3,3,0,0]}>{relEsp.map((d,i)=><Cell key={i} fill={d.v>=75?"#22c55e":"#ef4444"}/>)}</Bar></BarChart>},
+  ];
+  return (
+    <>
+      <Title t="Relatórios" s="Análise analítica de indicadores operacionais"/>
+      <div className="grid grid-cols-3 gap-3">
+        {cards.map((r,i)=>(
+          <Card key={i} className="cursor-pointer hover:border-white/[0.15] transition-all">
+            <div className="flex items-start justify-between mb-4">
+              <div className="w-12 h-12 rounded-xl flex items-center justify-center" style={{background:`${r.color}20`}}><span style={{color:r.color}}>{r.icon}</span></div>
+              <span className="text-[11px] text-slate-400 bg-white/[0.05] px-2 py-1 rounded-lg">{r.freq}</span>
+            </div>
+            <h3 className="text-[15px] font-bold mb-1">{r.titulo}</h3>
+            <p className="text-slate-400 text-[12px] mb-3">{r.desc}</p>
+            {/* Mini gráfico no lugar do botão Exportar PDF */}
+            <div className="h-[90px] w-full">
+              <ResponsiveContainer width="100%" height="100%">{r.chart}</ResponsiveContainer>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </>
+  );
+}
+
 function VConfig() {
   const [iv,setIv] = useState("30");
   const [au,setAu] = useState(true);
@@ -837,13 +701,27 @@ function VConfig() {
           </div>
         </Card>
         <Card>
-          <h2 className="text-[16px] font-black mb-4">Definição de SLA</h2>
+          <h2 className="text-[16px] font-black mb-4">Fonte de Dados</h2>
           <div className="space-y-3">
-            {[["Processo","Tempo de Espera Emergência"],["SLA","15 minutos"],["Meta","75% dos pacientes em até 15min"],["Fonte","Supabase · tabela espera"],["Status","● Conectado"]].map(([k,v])=>(
-              <div key={k} className="p-3 rounded-xl bg-white/[0.03] border border-white/[0.06]">
-                <p className="text-[11px] text-slate-400 mb-0.5">{k}</p>
-                <p className="text-[13px] font-medium" style={{color:k==="Status"?"#22c55e":k==="SLA"?"#60a5fa":k==="Meta"?"#22c55e":"#fff"}}>{v}</p>
-              </div>
+            <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+              <p className="text-[12px] text-slate-400 mb-1">Banco de Dados</p>
+              <p className="text-[12px] font-mono text-blue-400">Supabase · tabela espera</p>
+            </div>
+            <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+              <p className="text-[12px] text-slate-400 mb-1">Regra SLA</p>
+              <p className="text-[12px] text-green-400 font-bold">≤ 15min = dentro da meta · 75% meta</p>
+            </div>
+            <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+              <p className="text-[12px] text-slate-400 mb-1">Status</p>
+              <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-green-400 animate-pulse"/><p className="text-[12px] text-green-400">Conectado</p></div>
+            </div>
+          </div>
+        </Card>
+        <Card>
+          <h2 className="text-[16px] font-black mb-4">Sobre o Sistema</h2>
+          <div className="space-y-3 text-[13px]">
+            {[["Versão","1.0.0"],["Ambiente","Vercel"],["Framework","Next.js + TypeScript"],["Banco","Supabase"],["UI","TailwindCSS + Recharts"],["SLA","15min · Meta 75%"]].map(([k,v])=>(
+              <div key={k} className="flex justify-between py-2 border-b border-white/[0.04]"><span className="text-slate-400">{k}</span><span className="font-medium">{v}</span></div>
             ))}
           </div>
         </Card>
@@ -865,7 +743,6 @@ export default function Page() {
     fmt(); const id=setInterval(fmt,1000); return()=>clearInterval(id);
   },[]);
 
-  // ── MUDANÇA 5: busca dados do Supabase em vez do Firebase ──────────────────
   useEffect(()=>{
     const load = async () => {
       try {
@@ -884,16 +761,14 @@ export default function Page() {
         const graves   = rows.filter((r:any)=>r.tempo_espera_min>30&&r.tempo_espera_min<=60).length;
         const atencao  = rows.filter((r:any)=>r.tempo_espera_min>15&&r.tempo_espera_min<=30).length;
         const normais  = rows.filter((r:any)=>r.tempo_espera_min<=15).length;
-        // ── REGRA DE NEGÓCIO: SLA 15min, meta 75% ──
+        // Regra de negócio: SLA 15min / meta 75%
         const slaOk   = normais;
         const slaFora = total - slaOk;
         const slaPct  = Math.round((slaOk/total)*100);
-        // Top 10
         const top10 = sorted.slice(0,10).map((r:any)=>({
           unidade:r.nm_local, uf:r.uf, tempoMaximo:minToHM(r.tempo_espera_min),
           status:r.tempo_espera_min>60?"Crítico":r.tempo_espera_min>30?"Grave":r.tempo_espera_min>15?"Atenção":"Normal",
         }));
-        // Hospitais
         const hospMap:Record<string,any> = {};
         rows.forEach((r:any)=>{
           const k = r.nm_local;
@@ -910,7 +785,7 @@ export default function Page() {
           resumo:{totalRegistros:total,totalAguardando:aguardando,totalAtendimento:atendimento,
             tempoMedioFormatado,maiorEspera,maiorEsperaUnidade:maiorR.nm_local,maiorEsperaUF:maiorR.uf,
             criticos,graves,atencao,normais,slaPct,slaOk,slaFora},
-          top10, hospitais, atualizadoEm:new Date().toLocaleTimeString("pt-BR"), rawData:rows,
+          top10, hospitais, atualizadoEm:new Date().toLocaleTimeString("pt-BR"),
         });
         setUltimaAtu(new Date().toLocaleTimeString("pt-BR"));
       } catch(e) { console.error("Supabase error:", e); }
@@ -926,8 +801,6 @@ export default function Page() {
         <div className="absolute top-[-300px] left-[15%] w-[900px] h-[900px] rounded-full bg-blue-600/8 blur-[200px]"/>
         <div className="absolute bottom-[-200px] right-[-100px] w-[700px] h-[700px] rounded-full bg-cyan-500/8 blur-[180px]"/>
       </div>
-
-      {/* SIDEBAR */}
       <aside className="w-[210px] shrink-0 bg-[#030B18]/95 border-r border-white/[0.05] px-4 py-5 flex flex-col relative z-10">
         <div className="flex items-center gap-2 mb-8">
           <div className="w-10 h-10 rounded-xl bg-[#ff6b00] flex items-center justify-center text-lg font-black">✳</div>
@@ -951,14 +824,12 @@ export default function Page() {
           </div>
         </div>
       </aside>
-
-      {/* CONTENT */}
       <section className="flex-1 px-4 py-4 overflow-auto relative z-10">
         <header className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-4">
             <button className="w-10 h-10 rounded-xl border border-white/[0.06] bg-white/[0.03] flex items-center justify-center"><Menu size={18}/></button>
             <div className="flex items-center gap-3">
-              {/* MUDANÇA 1: Título atualizado */}
+              {/* MUDANÇA 1: título atualizado */}
               <h1 className="text-[20px] font-black tracking-tight">Central Operacional — Tempo de Espera Emergência</h1>
               <div className="w-2.5 h-2.5 rounded-full bg-green-400 shadow-[0_0_12px_rgba(74,222,128,.9)]"/>
               <span className="text-slate-400 text-[12px]">Atualizado: {ultimaAtu}</span>
@@ -970,7 +841,6 @@ export default function Page() {
             <div className="px-4 py-2 rounded-xl border border-white/[0.06] bg-white/[0.03] text-[13px] font-mono">{clock}</div>
           </div>
         </header>
-
         {nav==="Visão Geral"      && <VGeral ac={ac} sac={sac} dash={dashData}/>}
         {nav==="Operação ao Vivo" && <VOperacao dash={dashData}/>}
         {nav==="Ranking"          && <VRanking/>}
@@ -978,7 +848,7 @@ export default function Page() {
         {nav==="Estados (UF)"     && <VEstados/>}
         {nav==="SLA & Metas"      && <VSLA dash={dashData}/>}
         {nav==="Alertas"          && <VAlertas/>}
-        {nav==="Relatórios"       && <VRelatorios dash={dashData}/>}
+        {nav==="Relatórios"       && <VRelatorios/>}
         {nav==="Configurações"    && <VConfig/>}
       </section>
     </main>
