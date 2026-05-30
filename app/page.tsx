@@ -1,11 +1,11 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   Bell, Activity, Clock3, Hospital, ShieldAlert, Menu, Moon, Map,
   Stethoscope, Trophy, Settings, Download, HeartPulse, Search,
   Filter, ChevronDown, AlertTriangle, CheckCircle, XCircle,
   TrendingUp, TrendingDown, Users, Zap, FileText, BarChart2,
-  PieChart as PieIcon, RefreshCw,
+  PieChart as PieIcon, RefreshCw, X,
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip,
@@ -13,119 +13,61 @@ import {
   Radar, PolarGrid, PolarAngleAxis, CartesianGrid,
 } from "recharts";
 
-// ─── DATA ────────────────────────────────────────────────────────────────────
+// ─── TYPES ────────────────────────────────────────────────────────────────────
+interface Hospital { uf:string; unidade:string; especialidade:string; pacientesAguardando:number; pacientesAtendimento:number; tempoMaximo:string; tempoMaximoMin:number; status:string; motivo:string; observacoes:string; }
+interface DashData { resumo:{ totalRegistros:number; totalAguardando:number; totalAtendimento:number; tempoMedioFormatado:string; maiorEspera:string; maiorEsperaUnidade:string; maiorEsperaUF:string; criticos:number; graves:number; atencao:number; normais:number; }; top10:Hospital[]; hospitais:Hospital[]; atualizadoEm:string; turno?:string; data?:string; }
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+const fromMin = (m:number) => `${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
+const SC: Record<string,string> = { Crítico:"#ef4444", Grave:"#fb923c", Atenção:"#facc15", Normal:"#22c55e", Info:"#3b82f6" };
+const UF_NAMES: Record<string,string> = { AC:"Acre",AL:"Alagoas",AM:"Amazonas",AP:"Amapá",BA:"Bahia",CE:"Ceará",DF:"Dist. Federal",ES:"Espírito Santo",GO:"Goiás",MA:"Maranhão",MG:"Minas Gerais",MS:"Mato G. Sul",MT:"Mato Grosso",PA:"Pará",PB:"Paraíba",PE:"Pernambuco",PI:"Piauí",PR:"Paraná",RJ:"Rio de Janeiro",RN:"Rio G. Norte",RO:"Rondônia",RR:"Roraima",RS:"Rio G. Sul",SC:"Santa Catarina",SE:"Sergipe",SP:"São Paulo",TO:"Tocantins" };
+
+// ─── STATIC DATA (fallback) ───────────────────────────────────────────────────
 const sparkData = [{v:4},{v:7},{v:5},{v:8},{v:4},{v:9},{v:6},{v:8},{v:5},{v:10}];
-const lineData = [
-  {t:"15:00",v:48},{t:"17:00",v:41},{t:"19:00",v:35},{t:"21:00",v:46},
-  {t:"23:00",v:33},{t:"01:00",v:22},{t:"03:00",v:18},{t:"05:00",v:20},
-  {t:"07:00",v:26},{t:"09:00",v:31},{t:"11:00",v:19},{t:"13:00",v:24},{t:"15:00",v:34},
-];
-const donutData = [
-  {name:"< 15m",    value:133,pct:"40.7%",color:"#22c55e"},
-  {name:"15m-30m",  value:89, pct:"27.2%",color:"#06b6d4"},
-  {name:"30m-45m",  value:41, pct:"12.5%",color:"#3b82f6"},
-  {name:"45m-1h",   value:32, pct:"9.8%", color:"#facc15"},
-  {name:"1h-1h30",  value:18, pct:"5.5%", color:"#fb923c"},
-  {name:"> 1h30",   value:14, pct:"4.3%", color:"#ef4444"},
-];
-const top10 = [
-  ["Hospital Rio Poty - PI","4:53","#ef4444"],
-  ["Hospital Teresa de Lisieux - BA","2:38","#ef4444"],
-  ["PA Derby - PE","2:37","#ef4444"],
-  ["Hosp Notrecare ABC - SP","2:16","#ef4444"],
-  ["Hospital Salvalus - SP","2:09","#ef4444"],
-  ["PA Barueri - SP","1:31","#fb923c"],
-  ["Hospital Ana Lima - CE","1:29","#fb923c"],
-  ["Hosp. Eugenia Pinheiro - CE","1:25","#fb923c"],
-  ["Hosp Keila Ferreira Guarulhos - SP","1:25","#fb923c"],
-  ["CC Cotia 1 - SP","1:23","#fb923c"],
-];
-const specialties = [
-  ["Pediatria","00:31","#ef4444",92],
-  ["Clínica Médica","00:27","#fb923c",84],
-  ["Obstetrícia","00:26","#facc15",76],
-  ["Ortopedia","00:24","#3b82f6",69],
-  ["Ginecologia","00:22","#06b6d4",61],
-  ["Traumatologia","00:21","#22c55e",55],
-  ["Oftalmologia","00:18","#a78bfa",44],
-];
-const tableData = [
-  {uf:"PI",unidade:"Hospital Rio Poty",         esp:"Clínica Médica",agu:3, ate:1,max:"4:53",med:"01:15",status:"Crítico"},
-  {uf:"BA",unidade:"Hospital Teresa de Lisieux",esp:"Obstetrícia",   agu:6, ate:0,max:"2:38",med:"00:58",status:"Crítico"},
-  {uf:"PE",unidade:"PA Derby",                  esp:"Clínica Médica",agu:14,ate:7,max:"2:37",med:"00:47",status:"Grave"},
-  {uf:"SP",unidade:"Hosp Notrecare ABC",        esp:"Pediatria",     agu:11,ate:6,max:"2:16",med:"00:42",status:"Grave"},
-  {uf:"SP",unidade:"Hospital Salvalus",         esp:"Clínica Médica",agu:8, ate:6,max:"2:09",med:"00:40",status:"Grave"},
-  {uf:"SP",unidade:"PA Barueri",                esp:"Pediatria",     agu:5, ate:3,max:"1:31",med:"00:31",status:"Atenção"},
-  {uf:"CE",unidade:"Hospital Ana Lima",         esp:"Clínica Médica",agu:7, ate:4,max:"1:29",med:"00:29",status:"Atenção"},
-  {uf:"CE",unidade:"Hosp. Eugenia Pinheiro",    esp:"Ortopedia",     agu:4, ate:2,max:"1:25",med:"00:27",status:"Atenção"},
-  {uf:"GO",unidade:"Hospital Encore Goiás",     esp:"Clínica Médica",agu:2, ate:5,max:"0:22",med:"00:18",status:"Normal"},
-  {uf:"MG",unidade:"Hosp. Hapvida BH",          esp:"Ortopedia",     agu:3, ate:4,max:"0:18",med:"00:14",status:"Normal"},
-];
-const rankingData = [
-  {pos:1, nome:"Hospital Encore Goiás - GO",    score:98,med:"00:12",agu:2, status:"Normal", trend:"up"},
-  {pos:2, nome:"Hosp. Hapvida BH - MG",         score:95,med:"00:14",agu:3, status:"Normal", trend:"up"},
-  {pos:3, nome:"PA São Paulo Centro - SP",       score:91,med:"00:17",agu:4, status:"Normal", trend:"up"},
-  {pos:4, nome:"Hapvida Fortaleza - CE",         score:87,med:"00:19",agu:5, status:"Normal", trend:"same"},
-  {pos:5, nome:"Clínica Hapvida Recife - PE",    score:83,med:"00:21",agu:6, status:"Normal", trend:"up"},
-  {pos:6, nome:"PA Barueri - SP",               score:72,med:"00:31",agu:5, status:"Atenção",trend:"down"},
-  {pos:7, nome:"Hospital Ana Lima - CE",         score:68,med:"00:29",agu:7, status:"Atenção",trend:"same"},
-  {pos:8, nome:"Hosp. Eugenia Pinheiro - CE",    score:61,med:"00:27",agu:4, status:"Atenção",trend:"down"},
-  {pos:9, nome:"PA Derby - PE",                 score:44,med:"00:47",agu:14,status:"Grave",  trend:"down"},
-  {pos:10,nome:"Hospital Salvalus - SP",         score:41,med:"00:40",agu:8, status:"Grave",  trend:"down"},
-];
-const ufData = [
-  {uf:"SP",hospitais:8, agu:52,criticos:3,med:"00:38",status:"Grave"},
-  {uf:"CE",hospitais:6, agu:34,criticos:2,med:"00:29",status:"Atenção"},
-  {uf:"PE",hospitais:5, agu:38,criticos:2,med:"00:42",status:"Grave"},
-  {uf:"BA",hospitais:4, agu:22,criticos:2,med:"00:51",status:"Crítico"},
-  {uf:"PI",hospitais:2, agu:8, criticos:1,med:"01:15",status:"Crítico"},
-  {uf:"GO",hospitais:3, agu:12,criticos:0,med:"00:18",status:"Normal"},
-  {uf:"MG",hospitais:4, agu:15,criticos:0,med:"00:16",status:"Normal"},
-  {uf:"RJ",hospitais:3, agu:18,criticos:1,med:"00:33",status:"Atenção"},
-  {uf:"AM",hospitais:2, agu:9, criticos:0,med:"00:21",status:"Normal"},
-  {uf:"PA",hospitais:2, agu:7, criticos:0,med:"00:19",status:"Normal"},
-];
-const slaData = [
-  {esp:"Clínica Médica",meta:85,real:72,trend:-5},
-  {esp:"Pediatria",     meta:85,real:61,trend:-12},
-  {esp:"Obstetrícia",   meta:80,real:68,trend:2},
-  {esp:"Ortopedia",     meta:80,real:74,trend:4},
-  {esp:"Ginecologia",   meta:85,real:88,trend:6},
-  {esp:"Traumatologia", meta:80,real:91,trend:8},
-  {esp:"Oftalmologia",  meta:85,real:94,trend:3},
-];
-const slaHist = [
-  {mes:"Nov",sla:71},{mes:"Dez",sla:68},{mes:"Jan",sla:73},
-  {mes:"Fev",sla:70},{mes:"Mar",sla:75},{mes:"Abr",sla:72},{mes:"Mai",sla:68},
-];
+const lineData = [{t:"15:00",v:48},{t:"17:00",v:41},{t:"19:00",v:35},{t:"21:00",v:46},{t:"23:00",v:33},{t:"01:00",v:22},{t:"03:00",v:18},{t:"05:00",v:20},{t:"07:00",v:26},{t:"09:00",v:31},{t:"11:00",v:19},{t:"13:00",v:24},{t:"15:00",v:34}];
+const slaData = [{esp:"Clínica Médica",meta:85,real:72,trend:-5},{esp:"Pediatria",meta:85,real:61,trend:-12},{esp:"Obstetrícia",meta:80,real:68,trend:2},{esp:"Ortopedia",meta:80,real:74,trend:4},{esp:"Ginecologia",meta:85,real:88,trend:6},{esp:"Traumatologia",meta:80,real:91,trend:8},{esp:"Oftalmologia",meta:85,real:94,trend:3}];
+const slaHist = [{mes:"Nov",sla:71},{mes:"Dez",sla:68},{mes:"Jan",sla:73},{mes:"Fev",sla:70},{mes:"Mar",sla:75},{mes:"Abr",sla:72},{mes:"Mai",sla:68}];
 const alertasInit = [
-  {id:1, tipo:"Crítico",msg:"Hospital Rio Poty - PI: tempo de espera 4h53 — maior da rede",       hora:"15:24",lido:false},
-  {id:2, tipo:"Crítico",msg:"Hospital Teresa - BA: 6 pacientes aguardando sem atendimento",        hora:"15:21",lido:false},
-  {id:3, tipo:"Crítico",msg:"PA Derby - PE: 14 pacientes na fila — capacidade excedida",           hora:"15:18",lido:false},
-  {id:4, tipo:"Grave",  msg:"Hosp Notrecare ABC - SP: SLA violado nas últimas 2 horas",            hora:"15:10",lido:false},
-  {id:5, tipo:"Grave",  msg:"Hospital Salvalus - SP: médico ausente — Clínica Médica",             hora:"15:05",lido:false},
-  {id:6, tipo:"Grave",  msg:"PA Barueri - SP: tempo médio subiu 8 min na última hora",             hora:"14:58",lido:true},
-  {id:7, tipo:"Atenção",msg:"Hospital Ana Lima - CE: fila aumentando — monitorar",                  hora:"14:45",lido:true},
-  {id:8, tipo:"Atenção",msg:"Hosp. Eugenia Pinheiro - CE: 4 pacientes aguardando ortopedia",       hora:"14:32",lido:true},
-  {id:9, tipo:"Info",   msg:"14 hospitais sincronizados com sucesso",                               hora:"14:00",lido:true},
-  {id:10,tipo:"Info",   msg:"Relatório diário gerado com sucesso",                                  hora:"13:00",lido:true},
+  {id:1,tipo:"Crítico",msg:"Hospital Rio Poty - PI: tempo de espera 4h53 — maior da rede",hora:"15:24",lido:false},
+  {id:2,tipo:"Crítico",msg:"Hospital Teresa - BA: 6 pacientes aguardando sem atendimento",hora:"15:21",lido:false},
+  {id:3,tipo:"Crítico",msg:"PA Derby - PE: 14 pacientes na fila — capacidade excedida",hora:"15:18",lido:false},
+  {id:4,tipo:"Grave",msg:"Hosp Notrecare ABC - SP: SLA violado nas últimas 2 horas",hora:"15:10",lido:false},
+  {id:5,tipo:"Grave",msg:"Hospital Salvalus - SP: médico ausente — Clínica Médica",hora:"15:05",lido:false},
+  {id:6,tipo:"Grave",msg:"PA Barueri - SP: tempo médio subiu 8 min na última hora",hora:"14:58",lido:true},
+  {id:7,tipo:"Atenção",msg:"Hospital Ana Lima - CE: fila aumentando — monitorar",hora:"14:45",lido:true},
+  {id:8,tipo:"Atenção",msg:"Hosp. Eugenia Pinheiro - CE: 4 pacientes aguardando ortopedia",hora:"14:32",lido:true},
+  {id:9,tipo:"Info",msg:"14 hospitais sincronizados com sucesso",hora:"14:00",lido:true},
+  {id:10,tipo:"Info",msg:"Relatório diário gerado com sucesso",hora:"13:00",lido:true},
 ];
-const SC: Record<string,string> = {
-  Crítico:"#ef4444",Grave:"#fb923c",Atenção:"#facc15",Normal:"#22c55e",Info:"#3b82f6",
-};
 const NAV: [string,any,string?][] = [
   ["Visão Geral",Activity],["Operação ao Vivo",Clock3],["Ranking",Trophy],
   ["Especialidades",Stethoscope],["Estados (UF)",Map],["SLA & Metas",ShieldAlert],
   ["Alertas",Bell,"14"],["Relatórios",Download],["Configurações",Settings],
 ];
 
+// ─── MAP REGIONS ──────────────────────────────────────────────────────────────
+const MAP_REGIONS = [
+  {uf:"AM",d:"M70 90 L180 70 L280 80 L320 110 L310 160 L280 200 L220 230 L160 240 L100 220 L60 180 Z",lx:170,ly:165},
+  {uf:"RR",d:"M180 40 L240 30 L270 60 L280 80 L180 70 Z",lx:218,ly:55},
+  {uf:"MA",d:"M280 80 L370 60 L400 90 L390 130 L360 160 L320 150 L310 110 Z",lx:340,ly:115},
+  {uf:"CE",d:"M370 60 L430 65 L460 90 L450 130 L410 155 L390 130 L400 90 Z",lx:418,ly:103},
+  {uf:"PE",d:"M430 65 L500 60 L530 80 L540 120 L510 155 L470 160 L450 130 L460 90 Z",lx:488,ly:108},
+  {uf:"GO",d:"M310 160 L360 160 L390 130 L410 155 L400 210 L370 250 L330 260 L290 240 L280 200 Z",lx:333,ly:205},
+  {uf:"BA",d:"M410 155 L450 130 L470 160 L510 155 L520 200 L490 260 L440 290 L400 270 L380 240 L400 210 Z",lx:453,ly:215},
+  {uf:"PA",d:"M160 240 L220 230 L280 200 L290 240 L270 290 L230 310 L180 300 L150 270 Z",lx:208,ly:268},
+  {uf:"MS",d:"M230 310 L270 290 L290 240 L330 260 L340 310 L310 350 L270 360 L240 340 Z",lx:278,ly:322},
+  {uf:"MG",d:"M370 250 L400 270 L440 290 L450 340 L420 380 L380 390 L340 370 L330 330 L340 310 L370 290 Z",lx:390,ly:320},
+  {uf:"RJ",d:"M450 340 L490 320 L510 355 L490 390 L460 400 L440 380 L420 380 Z",lx:466,ly:360},
+  {uf:"SP",d:"M310 350 L340 370 L380 390 L390 430 L360 460 L320 450 L290 420 L290 390 Z",lx:337,ly:408},
+  {uf:"PR",d:"M290 420 L320 450 L350 470 L340 500 L300 510 L270 490 L260 460 Z",lx:302,ly:465},
+  {uf:"SC",d:"M270 490 L300 510 L310 530 L280 545 L255 530 L250 510 Z",lx:280,ly:518},
+  {uf:"RS",d:"M250 510 L255 530 L280 545 L270 570 L240 575 L210 560 L200 535 L220 515 Z",lx:237,ly:548},
+  {uf:"AC",d:"M100 270 L150 270 L180 300 L170 340 L130 350 L90 330 L80 290 Z",lx:125,ly:308},
+];
+
 // ─── ATOMS ───────────────────────────────────────────────────────────────────
 function Spark({color}:{color:string}) {
-  return (
-    <ResponsiveContainer width="100%" height="100%">
-      <LineChart data={sparkData}><Line type="monotone" dataKey="v" stroke={color} strokeWidth={2} dot={false}/></LineChart>
-    </ResponsiveContainer>
-  );
+  return <ResponsiveContainer width="100%" height="100%"><LineChart data={sparkData}><Line type="monotone" dataKey="v" stroke={color} strokeWidth={2} dot={false}/></LineChart></ResponsiveContainer>;
 }
 function KPI({title,value,color,icon,trend,sub}:any) {
   return (
@@ -160,51 +102,86 @@ function Card({children,className=""}:{children:React.ReactNode;className?:strin
 function Title({t,s}:{t:string;s?:string}) {
   return <div className="mb-4"><h1 className="text-[26px] font-black tracking-tight">{t}</h1>{s&&<p className="text-slate-400 text-[14px] mt-1">{s}</p>}</div>;
 }
-function BrazilMap() {
+function BrazilMap({ufStatus}:{ufStatus:Record<string,string>}) {
+  const getColor = (uf:string) => SC[ufStatus[uf]||"Normal"]??"#22c55e";
   return (
     <svg viewBox="0 0 580 580" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
-      <path d="M70 90 L180 70 L280 80 L320 110 L310 160 L280 200 L220 230 L160 240 L100 220 L60 180 Z" fill="#22c55e" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M180 40 L240 30 L270 60 L280 80 L180 70 Z" fill="#22c55e" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M280 80 L370 60 L400 90 L390 130 L360 160 L320 150 L310 110 Z" fill="#22c55e" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M370 60 L430 65 L460 90 L450 130 L410 155 L390 130 L400 90 Z" fill="#fb923c" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M430 65 L500 60 L530 80 L540 120 L510 155 L470 160 L450 130 L460 90 Z" fill="#ef4444" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M310 160 L360 160 L390 130 L410 155 L400 210 L370 250 L330 260 L290 240 L280 200 Z" fill="#facc15" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M410 155 L450 130 L470 160 L510 155 L520 200 L490 260 L440 290 L400 270 L380 240 L400 210 Z" fill="#ef4444" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M160 240 L220 230 L280 200 L290 240 L270 290 L230 310 L180 300 L150 270 Z" fill="#22c55e" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M230 310 L270 290 L290 240 L330 260 L340 310 L310 350 L270 360 L240 340 Z" fill="#facc15" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M370 250 L400 270 L440 290 L450 340 L420 380 L380 390 L340 370 L330 330 L340 310 L370 290 Z" fill="#fb923c" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M450 340 L490 320 L510 355 L490 390 L460 400 L440 380 L420 380 Z" fill="#ef4444" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M310 350 L340 370 L380 390 L390 430 L360 460 L320 450 L290 420 L290 390 Z" fill="#ef4444" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M290 420 L320 450 L350 470 L340 500 L300 510 L270 490 L260 460 Z" fill="#fb923c" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M270 490 L300 510 L310 530 L280 545 L255 530 L250 510 Z" fill="#22c55e" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M250 510 L255 530 L280 545 L270 570 L240 575 L210 560 L200 535 L220 515 Z" fill="#22c55e" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M100 270 L150 270 L180 300 L170 340 L130 350 L90 330 L80 290 Z" fill="#22c55e" stroke="#0a1a2e" strokeWidth="2"/>
+      {MAP_REGIONS.map(r=>(
+        <g key={r.uf}>
+          <path d={r.d} fill={getColor(r.uf)} stroke="#0a1a2e" strokeWidth="1.5"/>
+          <text x={r.lx} y={r.ly} fill="white" fontSize="11" fontWeight="bold" textAnchor="middle" dominantBaseline="middle" style={{filter:"drop-shadow(0 1px 2px rgba(0,0,0,0.9))"}}>
+            {r.uf}
+          </text>
+          <text x={r.lx} y={r.ly+13} fill="rgba(255,255,255,0.75)" fontSize="8" textAnchor="middle" dominantBaseline="middle" style={{filter:"drop-shadow(0 1px 1px rgba(0,0,0,0.9))"}}>
+            {(UF_NAMES[r.uf]||"").substring(0,10)}
+          </text>
+        </g>
+      ))}
     </svg>
   );
 }
 
+// ─── FILTER BAR ───────────────────────────────────────────────────────────────
+function FilterBar({search,setSearch,filterUF,setFilterUF,filterEsp,setFilterEsp,filterStatus,setFilterStatus,ufs,especialidades}:any) {
+  const hasFilter = filterUF!=="Todos"||filterEsp!=="Todas"||filterStatus!=="Todos"||search!=="";
+  return (
+    <div className="flex items-center gap-2 flex-wrap mb-4">
+      <div className="relative">
+        <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
+        <input value={search} onChange={e=>setSearch(e.target.value)} type="text" placeholder="Buscar hospital, UF, especialidade..." className="bg-white/[0.04] border border-white/[0.08] rounded-xl pl-9 pr-4 py-2 text-[13px] text-slate-300 placeholder-slate-500 outline-none focus:border-blue-500/50 w-72"/>
+      </div>
+      <select value={filterUF} onChange={e=>setFilterUF(e.target.value)} className="bg-white/[0.04] border border-white/[0.08] rounded-xl px-3 py-2 text-[13px] text-slate-300 outline-none">
+        <option value="Todos">Todas UF</option>
+        {ufs.map((u:string)=><option key={u} value={u}>{u} — {UF_NAMES[u]||u}</option>)}
+      </select>
+      <select value={filterEsp} onChange={e=>setFilterEsp(e.target.value)} className="bg-white/[0.04] border border-white/[0.08] rounded-xl px-3 py-2 text-[13px] text-slate-300 outline-none">
+        <option value="Todas">Todas Especialidades</option>
+        {especialidades.map((e:string)=><option key={e} value={e}>{e}</option>)}
+      </select>
+      <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} className="bg-white/[0.04] border border-white/[0.08] rounded-xl px-3 py-2 text-[13px] text-slate-300 outline-none">
+        <option value="Todos">Todos Status</option>
+        {["Crítico","Grave","Atenção","Normal"].map(s=><option key={s} value={s}>{s}</option>)}
+      </select>
+      {hasFilter&&(
+        <button onClick={()=>{setSearch("");setFilterUF("Todos");setFilterEsp("Todas");setFilterStatus("Todos");}} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-500/10 border border-red-500/30 text-[13px] text-red-400 hover:bg-red-500/20 transition-all">
+          <X size={13}/> Limpar filtros
+        </button>
+      )}
+      {hasFilter&&<span className="text-[12px] text-slate-400">Filtros ativos</span>}
+    </div>
+  );
+}
+
 // ─── VIEWS ────────────────────────────────────────────────────────────────────
-function VGeral({ac,sac}:any) {
+function VGeral({ac,sac,fH,fR,ufStatus,specialtiesReal,search,setSearch,filterUF,setFilterUF,filterEsp,setFilterEsp,filterStatus,setFilterStatus,ufs,especialidades}:any) {
+  const sorted = [...fH].sort((a:any,b:any)=>b.tempoMaximoMin-a.tempoMaximoMin);
+  const tot = fR.totalRegistros||1;
+  const donut = [
+    {name:"Normal",  value:fR.normais,  pct:`${Math.round(fR.normais/tot*100)}%`,  color:"#22c55e"},
+    {name:"Atenção", value:fR.atencao,  pct:`${Math.round(fR.atencao/tot*100)}%`,  color:"#06b6d4"},
+    {name:"Grave",   value:fR.graves,   pct:`${Math.round(fR.graves/tot*100)}%`,   color:"#fb923c"},
+    {name:"Crítico", value:fR.criticos, pct:`${Math.round(fR.criticos/tot*100)}%`, color:"#ef4444"},
+  ];
   return (
     <>
       <div className="grid grid-cols-6 gap-3 mb-3">
-        <KPI title="Pacientes Aguardando" value="327"   trend="12%"      sub="vs último período" color="#8B5CF6" icon={<Hospital size={20}/>}/>
-        <KPI title="Em Atendimento"       value="184"   trend="8%"       sub="vs último período" color="#3B82F6" icon={<Activity size={20}/>}/>
-        <KPI title="Tempo Médio"          value="00:28" trend="5 min"    sub="vs último período" color="#F59E0B" icon={<Clock3 size={20}/>}/>
-        <KPI title="Maior Espera"         value="04:53" trend="Rio Poty" sub="PI"                color="#EF4444" icon={<ShieldAlert size={20}/>}/>
-        <KPI title="Hospitais Críticos"   value="14"    trend="3 novos"  sub="críticos"          color="#EF4444" icon={<Bell size={20}/>}/>
-        <KPI title="SLA < 30 min"         value="68,4%" trend="6,2%"     sub="vs último período" color="#22C55E" icon={<ShieldAlert size={20}/>}/>
+        <KPI title="Pacientes Aguardando" value={String(fR.totalAguardando)} trend="vs último período" sub="" color="#8B5CF6" icon={<Hospital size={20}/>}/>
+        <KPI title="Em Atendimento"       value={String(fR.totalAtendimento)} trend="vs último período" sub="" color="#3B82F6" icon={<Activity size={20}/>}/>
+        <KPI title="Tempo Médio"          value={fR.tempoMedioFormatado} trend="vs último período" sub="" color="#F59E0B" icon={<Clock3 size={20}/>}/>
+        <KPI title="Maior Espera"         value={fR.maiorEspera} trend={fR.maiorEsperaUnidade?.substring(0,12)||""} sub={fR.maiorEsperaUF||""} color="#EF4444" icon={<ShieldAlert size={20}/>}/>
+        <KPI title="Hospitais Críticos"   value={String(fR.criticos)} trend="críticos" sub="" color="#EF4444" icon={<Bell size={20}/>}/>
+        <KPI title="Total Registros"      value={String(fR.totalRegistros)} trend="hospitais" sub="" color="#22C55E" icon={<ShieldAlert size={20}/>}/>
       </div>
       <div className="grid grid-cols-12 gap-3 mb-3">
         <Card className="col-span-4 relative overflow-hidden">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(37,99,235,.12),transparent_50%)]"/>
           <div className="relative z-10">
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-[16px] font-black">Mapa de Criticidade por Estado</h2>
+              <h2 className="text-[16px] font-black">Mapa de Criticidade</h2>
               <div className="flex flex-col gap-1">{["+","−","⤢"].map(b=><button key={b} className="w-8 h-8 rounded-lg bg-white/[0.04] border border-white/[0.06] flex items-center justify-center text-sm">{b}</button>)}</div>
             </div>
             <div className="rounded-[16px] border border-white/[0.06] bg-[#030D1A] h-[300px] relative flex items-center justify-center p-2 overflow-hidden">
-              <div className="relative z-10 w-full h-full flex items-center justify-center"><BrazilMap/></div>
+              <div className="relative z-10 w-full h-full flex items-center justify-center"><BrazilMap ufStatus={ufStatus}/></div>
               <div className="absolute left-3 bottom-3 space-y-1.5">
                 {[["Crítico (>1h)","#EF4444"],["Grave (30m-1h)","#F97316"],["Atenção (15m-30m)","#FACC15"],["Normal (<15m)","#22C55E"]].map(([l,c])=>(
                   <div key={l} className="flex items-center gap-2"><div className="w-3 h-3 rounded-sm" style={{background:c}}/><span className="text-[11px] text-slate-300">{l}</span></div>
@@ -216,31 +193,31 @@ function VGeral({ac,sac}:any) {
         <Card className="col-span-4">
           <h2 className="text-[16px] font-black mb-3">Top 10 Maiores Tempos de Espera</h2>
           <div className="space-y-2">
-            {top10.map(([n,t,c],i)=>(
+            {sorted.slice(0,10).map((h:any,i:number)=>(
               <div key={i} className="flex items-center justify-between rounded-xl bg-white/[0.03] px-3 py-2 border border-white/[0.03]">
                 <div className="flex items-center gap-3">
                   <div className="w-7 h-7 rounded-lg bg-white/[0.05] flex items-center justify-center text-[12px] text-slate-400">{i+1}</div>
-                  <span className="text-[13px] text-slate-200">{n as string}</span>
+                  <span className="text-[12px] text-slate-200">{h.unidade} - {h.uf}</span>
                 </div>
-                <span className="text-[20px] font-black" style={{color:c as string}}>{t as string}</span>
+                <span className="text-[18px] font-black" style={{color:SC[h.status]}}>{h.tempoMaximo}</span>
               </div>
             ))}
           </div>
         </Card>
         <Card className="col-span-4">
-          <h2 className="text-[16px] font-black mb-3">Distribuição por Tempo de Espera</h2>
+          <h2 className="text-[16px] font-black mb-3">Distribuição por Status</h2>
           <div className="flex items-center h-[300px] gap-2">
             <div className="w-[55%] h-full relative">
               <ResponsiveContainer width="100%" height="100%">
-                <PieChart><Pie data={donutData} dataKey="value" innerRadius={65} outerRadius={105} paddingAngle={2} stroke="transparent">{donutData.map((e,i)=><Cell key={i} fill={e.color}/>)}</Pie></PieChart>
+                <PieChart><Pie data={donut} dataKey="value" innerRadius={65} outerRadius={105} paddingAngle={2} stroke="transparent">{donut.map((e,i)=><Cell key={i} fill={e.color}/>)}</Pie></PieChart>
               </ResponsiveContainer>
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                <span className="text-[44px] font-black leading-none">327</span>
+                <span className="text-[44px] font-black leading-none">{fR.totalRegistros}</span>
                 <span className="text-slate-400 text-[12px]">Total</span>
               </div>
             </div>
             <div className="w-[45%] space-y-3">
-              {[...donutData].reverse().map((item,i)=>(
+              {[...donut].reverse().map((item,i)=>(
                 <div key={i} className="flex items-center justify-between">
                   <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full" style={{background:item.color}}/><span className="text-[12px] text-slate-300">{item.name}</span></div>
                   <div><span className="font-bold text-[13px] mr-1">{item.value}</span><span className="text-slate-500 text-[11px]">({item.pct})</span></div>
@@ -255,7 +232,6 @@ function VGeral({ac,sac}:any) {
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-[16px] font-black">Evolução do Tempo Médio de Espera</h2>
             <div className="flex items-center gap-2">
-              <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/[0.06] bg-white/[0.03] text-[12px] text-slate-300">Últimas 24 horas <ChevronDown size={12}/></button>
               {(["Linha","Área","Barras"] as const).map(m=>(
                 <button key={m} onClick={()=>sac(m)} className={`px-3 py-1.5 rounded-lg text-[12px] transition-all ${ac===m?"bg-[#2563EB]":"bg-white/[0.04] text-slate-400"}`}>{m}</button>
               ))}
@@ -274,95 +250,131 @@ function VGeral({ac,sac}:any) {
           </div>
         </Card>
         <Card className="col-span-4">
-          <div className="flex items-center gap-2 mb-4"><h2 className="text-[16px] font-black">Por Especialidade</h2><span className="text-slate-400 text-[11px]">(média de espera)</span></div>
+          <div className="flex items-center gap-2 mb-4"><h2 className="text-[16px] font-black">Por Especialidade</h2></div>
           <div className="space-y-4">
-            {specialties.map(([n,t,c,p],i)=>(
+            {specialtiesReal.slice(0,7).map(([n,t,c,p]:any,i:number)=>(
               <div key={i}>
-                <div className="flex items-center justify-between mb-1"><span className="text-[13px]">{n as string}</span><span className="text-slate-400 text-[12px]">{t as string}</span></div>
-                <div className="h-2 rounded-full bg-white/[0.05] overflow-hidden"><div className="h-full rounded-full" style={{width:`${p as number}%`,background:c as string,boxShadow:`0 0 12px ${c as string}80`}}/></div>
+                <div className="flex items-center justify-between mb-1"><span className="text-[13px]">{n}</span><span className="text-slate-400 text-[12px]">{t}</span></div>
+                <div className="h-2 rounded-full bg-white/[0.05] overflow-hidden"><div className="h-full rounded-full" style={{width:`${p}%`,background:c,boxShadow:`0 0 12px ${c}80`}}/></div>
               </div>
             ))}
           </div>
         </Card>
       </div>
       <Card>
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-3">
           <h2 className="text-[16px] font-black">Hospitais em Tempo Real</h2>
-          <div className="flex items-center gap-2">
-            <div className="relative"><Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/><input type="text" placeholder="Buscar hospital, unidade ou especialidade..." className="bg-white/[0.03] border border-white/[0.06] rounded-xl pl-9 pr-4 py-2 text-[13px] text-slate-300 placeholder-slate-500 outline-none focus:border-blue-500/50 w-72"/></div>
-            <button className="flex items-center gap-2 px-3 py-2 rounded-xl border border-white/[0.06] bg-white/[0.03] text-[13px] text-slate-300"><Filter size={14}/> Filtros</button>
-            <button className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-white/[0.06] bg-white/[0.03] text-[13px] text-slate-300">Todas UF <ChevronDown size={12}/></button>
-            <button className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-white/[0.06] bg-white/[0.03] text-[13px] text-slate-300">Todas Especialidades <ChevronDown size={12}/></button>
-            <button className="flex items-center gap-2 px-3 py-2 rounded-xl border border-white/[0.06] bg-white/[0.03] text-[13px] text-slate-300"><Download size={14}/> Exportar</button>
-          </div>
         </div>
-        <table className="w-full">
-          <thead><tr className="border-b border-white/[0.06]">{["UF","Unidade","Especialidade","Aguardando","Em Atendimento","Tempo Máximo","Média Espera","Status","Tendência"].map(h=><th key={h} className="text-left pb-3 pr-4 text-[12px] text-slate-400 font-medium whitespace-nowrap">{h}</th>)}</tr></thead>
-          <tbody>{tableData.map((r,i)=><tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02] transition-colors"><td className="py-2.5 pr-4 text-[13px] font-bold text-slate-300">{r.uf}</td><td className="py-2.5 pr-4 text-[13px]">{r.unidade}</td><td className="py-2.5 pr-4 text-[13px] text-slate-300">{r.esp}</td><td className="py-2.5 pr-4 text-[13px] font-bold">{r.agu}</td><td className="py-2.5 pr-4 text-[13px]">{r.ate}</td><td className="py-2.5 pr-4 text-[13px] font-bold" style={{color:SC[r.status]}}>{r.max}</td><td className="py-2.5 pr-4 text-[13px]">{r.med}</td><td className="py-2.5 pr-4"><Badge status={r.status}/></td><td className="py-2.5"><Tiny color={SC[r.status]}/></td></tr>)}</tbody>
-        </table>
+        <FilterBar {...{search,setSearch,filterUF,setFilterUF,filterEsp,setFilterEsp,filterStatus,setFilterStatus,ufs,especialidades}}/>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead><tr className="border-b border-white/[0.06]">{["UF","Unidade","Especialidade","Aguardando","Atendimento","Tempo Máx","Status","Tendência"].map(h=><th key={h} className="text-left pb-3 pr-4 text-[12px] text-slate-400 font-medium whitespace-nowrap">{h}</th>)}</tr></thead>
+            <tbody>{fH.map((r:any,i:number)=>(
+              <tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02] transition-colors">
+                <td className="py-2.5 pr-4 text-[13px] font-bold text-slate-300">{r.uf}</td>
+                <td className="py-2.5 pr-4 text-[13px]">{r.unidade}</td>
+                <td className="py-2.5 pr-4 text-[13px] text-slate-300">{r.especialidade}</td>
+                <td className="py-2.5 pr-4 text-[13px] font-bold">{r.pacientesAguardando}</td>
+                <td className="py-2.5 pr-4 text-[13px]">{r.pacientesAtendimento}</td>
+                <td className="py-2.5 pr-4 text-[13px] font-bold" style={{color:SC[r.status]}}>{r.tempoMaximo}</td>
+                <td className="py-2.5 pr-4"><Badge status={r.status}/></td>
+                <td className="py-2.5"><Tiny color={SC[r.status]}/></td>
+              </tr>
+            ))}</tbody>
+          </table>
+          {fH.length===0&&<div className="text-center py-8 text-slate-500">Nenhum registro encontrado com os filtros selecionados.</div>}
+        </div>
       </Card>
     </>
   );
 }
 
-function VOperacao() {
+function VOperacao({fH,fR}:any) {
   return (
     <>
       <Title t="Operação ao Vivo" s="Monitoramento em tempo real · atualiza a cada 30s"/>
       <div className="grid grid-cols-4 gap-3 mb-3">
-        {[{l:"Hospitais Online",v:"47",i:<Zap size={18}/>,c:"#22c55e"},{l:"Críticos",v:"14",i:<AlertTriangle size={18}/>,c:"#ef4444"},{l:"Total na Fila",v:"327",i:<Users size={18}/>,c:"#8b5cf6"},{l:"Atendidos hoje",v:"1.284",i:<CheckCircle size={18}/>,c:"#06b6d4"}].map((k,i)=>(
+        {[
+          {l:"Hospitais Online",v:String(fR.totalRegistros),i:<Zap size={18}/>,c:"#22c55e"},
+          {l:"Críticos",v:String(fR.criticos),i:<AlertTriangle size={18}/>,c:"#ef4444"},
+          {l:"Total na Fila",v:String(fR.totalAguardando),i:<Users size={18}/>,c:"#8b5cf6"},
+          {l:"Atendidos hoje",v:"1.284",i:<CheckCircle size={18}/>,c:"#06b6d4"},
+        ].map((k,i)=>(
           <Card key={i} className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-xl flex items-center justify-center" style={{background:`${k.c}20`}}><span style={{color:k.c}}>{k.i}</span></div>
             <div><p className="text-slate-400 text-[12px]">{k.l}</p><p className="text-[28px] font-black leading-none mt-0.5">{k.v}</p></div>
           </Card>
         ))}
       </div>
-      <div className="grid grid-cols-12 gap-3">
-        <Card className="col-span-8">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-[16px] font-black">Hospitais — Situação Agora</h2>
-            <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-green-400 animate-pulse"/><span className="text-[12px] text-slate-400">LIVE</span></div>
-          </div>
+      <Card>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-[16px] font-black">Hospitais — Situação Agora</h2>
+          <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-green-400 animate-pulse"/><span className="text-[12px] text-slate-400">LIVE</span></div>
+        </div>
+        <div className="overflow-x-auto">
           <table className="w-full">
-            <thead><tr className="border-b border-white/[0.06]">{["UF","Unidade","Especialidade","Fila","Atend.","Máx","Média","Status"].map(h=><th key={h} className="text-left pb-2 pr-3 text-[11px] text-slate-400 font-medium">{h}</th>)}</tr></thead>
-            <tbody>{tableData.map((r,i)=><tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02]"><td className="py-2 pr-3 text-[12px] font-bold text-slate-300">{r.uf}</td><td className="py-2 pr-3 text-[12px]">{r.unidade}</td><td className="py-2 pr-3 text-[12px] text-slate-400">{r.esp}</td><td className="py-2 pr-3 text-[12px] font-black" style={{color:r.agu>8?"#ef4444":r.agu>4?"#fb923c":"#22c55e"}}>{r.agu}</td><td className="py-2 pr-3 text-[12px]">{r.ate}</td><td className="py-2 pr-3 text-[12px] font-bold" style={{color:SC[r.status]}}>{r.max}</td><td className="py-2 pr-3 text-[12px]">{r.med}</td><td className="py-2"><Badge status={r.status}/></td></tr>)}</tbody>
+            <thead>
+              <tr className="border-b border-white/[0.06]">
+                {["UF","Unidade","Especialidade","Fila","Atend.","Tempo Máx","Status","Motivo","Observação"].map(h=>(
+                  <th key={h} className={`text-left pb-3 pr-4 text-[12px] text-slate-400 font-medium whitespace-nowrap ${h==="Motivo"||h==="Observação"?"text-amber-400":""}`}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {fH.map((r:any,i:number)=>(
+                <tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02] group">
+                  <td className="py-3 pr-4 text-[12px] font-bold text-slate-300">{r.uf}</td>
+                  <td className="py-3 pr-4 text-[12px] font-medium">{r.unidade}</td>
+                  <td className="py-3 pr-4 text-[12px] text-slate-400">{r.especialidade}</td>
+                  <td className="py-3 pr-4 text-[12px] font-black" style={{color:r.pacientesAguardando>8?"#ef4444":r.pacientesAguardando>4?"#fb923c":"#22c55e"}}>{r.pacientesAguardando}</td>
+                  <td className="py-3 pr-4 text-[12px]">{r.pacientesAtendimento}</td>
+                  <td className="py-3 pr-4 text-[13px] font-black" style={{color:SC[r.status]}}>{r.tempoMaximo}</td>
+                  <td className="py-3 pr-4"><Badge status={r.status}/></td>
+                  <td className="py-3 pr-4">
+                    {r.motivo&&r.motivo!=="*"?(
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium bg-amber-500/10 border border-amber-500/20 text-amber-300 max-w-[180px] truncate" title={r.motivo}>
+                        ⚠ {r.motivo}
+                      </span>
+                    ):<span className="text-slate-600 text-[11px]">—</span>}
+                  </td>
+                  <td className="py-3 pr-4">
+                    {r.observacoes&&r.observacoes!=="*"?(
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium bg-blue-500/10 border border-blue-500/20 text-blue-300 max-w-[200px] truncate" title={r.observacoes}>
+                        💬 {r.observacoes}
+                      </span>
+                    ):<span className="text-slate-600 text-[11px]">—</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
           </table>
-        </Card>
-        <Card className="col-span-4">
-          <h2 className="text-[16px] font-black mb-3">Fila por Estado</h2>
-          <div className="h-[340px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={ufData.slice(0,7)} layout="vertical" margin={{left:8,right:16}}>
-                <XAxis type="number" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}}/>
-                <YAxis dataKey="uf" type="category" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#94a3b8"}} width={28}/>
-                <Tooltip contentStyle={{background:"#081120",border:"1px solid rgba(255,255,255,.06)",borderRadius:"12px",color:"#fff",fontSize:12}}/>
-                <Bar dataKey="agu" fill="#3b82f6" radius={[0,4,4,0]} name="Aguardando"/>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-      </div>
+          {fH.length===0&&<div className="text-center py-8 text-slate-500">Nenhum registro encontrado.</div>}
+        </div>
+      </Card>
     </>
   );
 }
 
-function VRanking() {
+function VRanking({rankingReal}:any) {
+  const top3 = rankingReal.slice(0,3);
+  const rest  = rankingReal.slice(3);
   return (
     <>
-      <Title t="Ranking de Hospitais" s="Classificação por performance e SLA"/>
+      <Title t="Ranking de Hospitais" s="Classificação por performance — calculado com dados reais"/>
       <div className="grid grid-cols-3 gap-3 mb-4">
-        {rankingData.slice(0,3).map((r,i)=>(
+        {top3.map((r:any,i:number)=>(
           <Card key={i} className="text-center relative overflow-hidden">
             <div className="absolute inset-0 opacity-10" style={{background:`radial-gradient(circle at center,${["#facc15","#94a3b8","#b45309"][i]},transparent 60%)`}}/>
             <div className="relative z-10">
               <div className="text-[40px] mb-2">{["🥇","🥈","🥉"][i]}</div>
-              <p className="text-[13px] text-slate-300 font-medium mb-1">{r.nome}</p>
+              <p className="text-[12px] text-slate-300 font-medium mb-1 px-2">{r.nome}</p>
               <div className="text-[42px] font-black" style={{color:["#facc15","#94a3b8","#b45309"][i]}}>{r.score}</div>
               <p className="text-slate-400 text-[12px]">Score de performance</p>
-              <div className="mt-3 flex justify-center gap-3 text-[12px]">
-                <span className="text-slate-400">Média: <span className="text-white font-bold">{r.med}</span></span>
+              <div className="mt-2 flex justify-center gap-3 text-[12px]">
+                <span className="text-slate-400">Máx: <span className="text-white font-bold">{r.med}</span></span>
                 <span className="text-slate-400">Fila: <span className="text-white font-bold">{r.agu}</span></span>
               </div>
+              <div className="mt-2"><Badge status={r.status}/></div>
             </div>
           </Card>
         ))}
@@ -370,16 +382,17 @@ function VRanking() {
       <Card>
         <h2 className="text-[16px] font-black mb-4">Classificação Completa</h2>
         <table className="w-full">
-          <thead><tr className="border-b border-white/[0.06]">{["Pos","Hospital","Score","Média","Fila","Status","Tendência"].map(h=><th key={h} className="text-left pb-3 pr-4 text-[12px] text-slate-400 font-medium">{h}</th>)}</tr></thead>
-          <tbody>{rankingData.map((r,i)=>(
+          <thead><tr className="border-b border-white/[0.06]">{["Pos","Hospital","Score","Tempo Máx","Fila","Especialidade","Status","Tendência"].map(h=><th key={h} className="text-left pb-3 pr-4 text-[12px] text-slate-400 font-medium">{h}</th>)}</tr></thead>
+          <tbody>{rankingReal.map((r:any,i:number)=>(
             <tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
               <td className="py-3 pr-4"><div className="w-8 h-8 rounded-lg flex items-center justify-center text-[13px] font-black" style={{background:i<3?[`#facc1520`,`#94a3b820`,`#b4590920`][i]:"rgba(255,255,255,.04)",color:i<3?["#facc15","#94a3b8","#b45309"][i]:"#64748b"}}>{r.pos}</div></td>
               <td className="py-3 pr-4 text-[13px]">{r.nome}</td>
-              <td className="py-3 pr-4"><div className="flex items-center gap-2"><div className="h-2 rounded-full bg-white/[0.05] overflow-hidden w-20"><div className="h-full rounded-full" style={{width:`${r.score}%`,background:r.score>90?"#22c55e":r.score>70?"#06b6d4":r.score>50?"#facc15":"#ef4444"}}/></div><span className="text-[13px] font-bold">{r.score}</span></div></td>
-              <td className="py-3 pr-4 text-[13px]">{r.med}</td>
+              <td className="py-3 pr-4"><div className="flex items-center gap-2"><div className="h-2 rounded-full bg-white/[0.05] overflow-hidden w-20"><div className="h-full rounded-full" style={{width:`${r.score}%`,background:r.score>80?"#22c55e":r.score>60?"#06b6d4":r.score>40?"#facc15":"#ef4444"}}/></div><span className="text-[13px] font-bold">{r.score}</span></div></td>
+              <td className="py-3 pr-4 text-[13px] font-bold" style={{color:SC[r.status]}}>{r.med}</td>
               <td className="py-3 pr-4 text-[13px]">{r.agu}</td>
+              <td className="py-3 pr-4 text-[12px] text-slate-400">{r.esp}</td>
               <td className="py-3 pr-4"><Badge status={r.status}/></td>
-              <td className="py-3">{r.trend==="up"&&<span className="text-green-400 text-[12px] font-bold flex items-center gap-1"><TrendingUp size={14}/>Subindo</span>}{r.trend==="down"&&<span className="text-red-400 text-[12px] font-bold flex items-center gap-1"><TrendingDown size={14}/>Caindo</span>}{r.trend==="same"&&<span className="text-slate-400 text-[12px]">Estável</span>}</td>
+              <td className="py-3">{r.trend==="up"?<span className="text-green-400 text-[12px] font-bold flex items-center gap-1"><TrendingUp size={14}/>Subindo</span>:r.trend==="down"?<span className="text-red-400 text-[12px] font-bold flex items-center gap-1"><TrendingDown size={14}/>Caindo</span>:<span className="text-slate-400 text-[12px]">Estável</span>}</td>
             </tr>
           ))}</tbody>
         </table>
@@ -388,21 +401,21 @@ function VRanking() {
   );
 }
 
-function VEspec() {
+function VEspec({specialtiesReal}:any) {
   return (
     <>
-      <Title t="Por Especialidade" s="Análise de tempo de espera por área médica"/>
+      <Title t="Por Especialidade" s="Análise de tempo de espera por área médica — dados reais"/>
       <div className="grid grid-cols-4 gap-3 mb-3">
-        {specialties.map(([n,t,c,p],i)=>(
+        {specialtiesReal.slice(0,4).map(([n,t,c,p]:any,i:number)=>(
           <Card key={i}>
             <div className="flex items-start justify-between mb-3">
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{background:`${c as string}20`}}><Stethoscope size={18} style={{color:c as string}}/></div>
-              <Badge status={(p as number)>80?"Crítico":(p as number)>65?"Grave":(p as number)>50?"Atenção":"Normal"}/>
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{background:`${c}20`}}><Stethoscope size={18} style={{color:c}}/></div>
+              <Badge status={p>80?"Crítico":p>60?"Grave":p>40?"Atenção":"Normal"}/>
             </div>
-            <p className="text-slate-400 text-[12px]">{n as string}</p>
-            <p className="text-[28px] font-black mt-1">{t as string}</p>
-            <div className="mt-3 h-2 rounded-full bg-white/[0.05] overflow-hidden"><div className="h-full rounded-full" style={{width:`${p as number}%`,background:c as string,boxShadow:`0 0 10px ${c as string}80`}}/></div>
-            <p className="text-slate-500 text-[11px] mt-1">Pressão: {p as number}%</p>
+            <p className="text-slate-400 text-[12px]">{n}</p>
+            <p className="text-[28px] font-black mt-1">{t}</p>
+            <div className="mt-3 h-2 rounded-full bg-white/[0.05] overflow-hidden"><div className="h-full rounded-full" style={{width:`${p}%`,background:c,boxShadow:`0 0 10px ${c}80`}}/></div>
+            <p className="text-slate-500 text-[11px] mt-1">Pressão: {p}%</p>
           </Card>
         ))}
       </div>
@@ -411,11 +424,11 @@ function VEspec() {
           <h2 className="text-[16px] font-black mb-3">Pressão de Fila por Especialidade</h2>
           <div className="h-[260px]">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={specialties.map(([n,,c,p])=>({name:(n as string).substring(0,9),v:p as number}))} margin={{left:0,right:8}}>
-                <XAxis dataKey="name" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}}/>
+              <BarChart data={specialtiesReal.map(([n,,c,p]:any)=>({name:String(n).substring(0,10),v:p}))} margin={{left:0,right:8}}>
+                <XAxis dataKey="name" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:10,fill:"#64748b"}}/>
                 <YAxis stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}} domain={[0,100]}/>
                 <Tooltip contentStyle={{background:"#081120",border:"1px solid rgba(255,255,255,.06)",borderRadius:"12px",color:"#fff",fontSize:12}}/>
-                <Bar dataKey="v" radius={[6,6,0,0]} name="Pressão">{specialties.map(([,,c],i)=><Cell key={i} fill={c as string}/>)}</Bar>
+                <Bar dataKey="v" radius={[6,6,0,0]} name="Pressão">{specialtiesReal.map(([,,c]:any,i:number)=><Cell key={i} fill={c}/>)}</Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -424,7 +437,7 @@ function VEspec() {
           <h2 className="text-[16px] font-black mb-3">Radar de Especialidades</h2>
           <div className="h-[260px]">
             <ResponsiveContainer width="100%" height="100%">
-              <RadarChart data={specialties.map(([n,,,p])=>({esp:(n as string).substring(0,6),val:p as number}))}>
+              <RadarChart data={specialtiesReal.map(([n,,,p]:any)=>({esp:String(n).substring(0,8),val:p}))}>
                 <PolarGrid stroke="#1e3a5f"/>
                 <PolarAngleAxis dataKey="esp" tick={{fill:"#64748b",fontSize:11}}/>
                 <Radar name="Pressão" dataKey="val" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.25}/>
@@ -437,24 +450,36 @@ function VEspec() {
   );
 }
 
-function VEstados() {
+function VEstados({ufDataReal,ufStatus}:any) {
   return (
     <>
-      <Title t="Por Estado (UF)" s="Visão consolidada por unidade federativa"/>
+      <Title t="Por Estado (UF)" s="Visão consolidada por unidade federativa — dados reais"/>
       <div className="grid grid-cols-12 gap-3">
         <Card className="col-span-4 relative overflow-hidden">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(37,99,235,.12),transparent_50%)]"/>
           <h2 className="text-[16px] font-black mb-3 relative z-10">Mapa de Criticidade</h2>
-          <div className="rounded-[16px] border border-white/[0.06] bg-[#030D1A] h-[360px] relative flex items-center justify-center p-2 overflow-hidden">
-            <div className="relative z-10 w-full h-full flex items-center justify-center"><BrazilMap/></div>
+          <div className="rounded-[16px] border border-white/[0.06] bg-[#030D1A] h-[380px] relative flex items-center justify-center p-2 overflow-hidden">
+            <div className="relative z-10 w-full h-full"><BrazilMap ufStatus={ufStatus}/></div>
           </div>
         </Card>
         <Card className="col-span-8">
           <h2 className="text-[16px] font-black mb-3">Desempenho por UF</h2>
-          <table className="w-full">
-            <thead><tr className="border-b border-white/[0.06]">{["UF","Hospitais","Aguardando","Críticos","Média Espera","Status"].map(h=><th key={h} className="text-left pb-3 pr-4 text-[12px] text-slate-400 font-medium">{h}</th>)}</tr></thead>
-            <tbody>{ufData.map((r,i)=><tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02]"><td className="py-3 pr-4"><span className="text-[16px] font-black" style={{color:SC[r.status]}}>{r.uf}</span></td><td className="py-3 pr-4 text-[13px]">{r.hospitais}</td><td className="py-3 pr-4 text-[13px] font-bold">{r.agu}</td><td className="py-3 pr-4 text-[13px] font-bold" style={{color:r.criticos>0?"#ef4444":"#22c55e"}}>{r.criticos}</td><td className="py-3 pr-4 text-[13px]">{r.med}</td><td className="py-3"><Badge status={r.status}/></td></tr>)}</tbody>
-          </table>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead><tr className="border-b border-white/[0.06]">{["UF","Estado","Registros","Aguardando","Críticos","Média Espera","Status"].map(h=><th key={h} className="text-left pb-3 pr-4 text-[12px] text-slate-400 font-medium">{h}</th>)}</tr></thead>
+              <tbody>{ufDataReal.map((r:any,i:number)=>(
+                <tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
+                  <td className="py-3 pr-4"><span className="text-[16px] font-black" style={{color:SC[r.status]}}>{r.uf}</span></td>
+                  <td className="py-3 pr-4 text-[12px] text-slate-400">{UF_NAMES[r.uf]||r.uf}</td>
+                  <td className="py-3 pr-4 text-[13px]">{r.hospitais}</td>
+                  <td className="py-3 pr-4 text-[13px] font-bold">{r.agu}</td>
+                  <td className="py-3 pr-4 text-[13px] font-bold" style={{color:r.criticos>0?"#ef4444":"#22c55e"}}>{r.criticos}</td>
+                  <td className="py-3 pr-4 text-[13px]">{r.med}</td>
+                  <td className="py-3"><Badge status={r.status}/></td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
         </Card>
       </div>
     </>
@@ -514,7 +539,7 @@ function VSLA() {
               <span className="text-[13px] w-32 text-slate-300">{d.esp}</span>
               <div className="flex-1 h-3 rounded-full bg-white/[0.05] overflow-hidden relative">
                 <div className="h-full rounded-full" style={{width:`${d.meta}%`,background:"#1e3a5f"}}/>
-                <div className="h-full rounded-full absolute top-0 left-0" style={{width:`${d.real}%`,background:d.real>=d.meta?"#22c55e":"#ef4444",boxShadow:`0 0 10px ${d.real>=d.meta?"#22c55e":"#ef4444"}80`}}/>
+                <div className="h-full rounded-full absolute top-0 left-0" style={{width:`${d.real}%`,background:d.real>=d.meta?"#22c55e":"#ef4444"}}/>
               </div>
               <span className="text-[13px] font-bold w-12 text-right" style={{color:d.real>=d.meta?"#22c55e":"#ef4444"}}>{d.real}%</span>
               <span className="text-[12px] text-slate-500 w-16">meta {d.meta}%</span>
@@ -592,7 +617,6 @@ function VRelatorios() {
 }
 
 function VConfig() {
-  const [iv,setIv] = useState("30");
   const [au,setAu] = useState(true);
   return (
     <>
@@ -600,40 +624,29 @@ function VConfig() {
       <div className="grid grid-cols-2 gap-4">
         <Card>
           <h2 className="text-[16px] font-black mb-4">Atualização de Dados</h2>
-          <div className="space-y-4">
-            <div>
-              <label className="text-[13px] text-slate-400 block mb-2">Intervalo de atualização</label>
-              <select value={iv} onChange={e=>setIv(e.target.value)} className="w-full bg-white/[0.05] border border-white/[0.08] rounded-xl px-4 py-2.5 text-[13px] text-white outline-none">
-                <option value="10">A cada 10 segundos</option>
-                <option value="30">A cada 30 segundos</option>
-                <option value="60">A cada 1 minuto</option>
-                <option value="300">A cada 5 minutos</option>
-              </select>
-            </div>
-            <div className="flex items-center justify-between p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
-              <div><p className="text-[13px] font-medium">Atualização automática</p><p className="text-[11px] text-slate-400">Recarrega dados automaticamente</p></div>
-              <button onClick={()=>setAu(n=>!n)} className={`w-12 h-6 rounded-full transition-all relative ${au?"bg-blue-600":"bg-white/[0.1]"}`}><div className={`w-4 h-4 rounded-full bg-white absolute top-1 transition-all ${au?"left-7":"left-1"}`}/></button>
-            </div>
+          <div className="flex items-center justify-between p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+            <div><p className="text-[13px] font-medium">Atualização automática</p><p className="text-[11px] text-slate-400">Recarrega dados a cada 30s</p></div>
+            <button onClick={()=>setAu(n=>!n)} className={`w-12 h-6 rounded-full transition-all relative ${au?"bg-blue-600":"bg-white/[0.1]"}`}><div className={`w-4 h-4 rounded-full bg-white absolute top-1 transition-all ${au?"left-7":"left-1"}`}/></button>
           </div>
         </Card>
         <Card>
           <h2 className="text-[16px] font-black mb-4">Fonte de Dados</h2>
           <div className="space-y-3">
             <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
-              <p className="text-[12px] text-slate-400 mb-1">Arquivo Excel (OneDrive)</p>
-              <p className="text-[12px] font-mono text-blue-400">Mac.Exportação BI tempo de esperas.xlsm</p>
+              <p className="text-[12px] text-slate-400 mb-1">Banco de Dados</p>
+              <p className="text-[12px] font-mono text-blue-400">Firebase Firestore</p>
             </div>
             <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
               <p className="text-[12px] text-slate-400 mb-1">Status</p>
-              <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-yellow-400"/><p className="text-[12px] text-yellow-400">Autenticação corporativa necessária</p></div>
+              <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-green-400 animate-pulse"/><p className="text-[12px] text-green-400">Conectado</p></div>
             </div>
-            <button className="w-full py-2.5 rounded-xl bg-[#2563EB] text-[13px] font-bold flex items-center justify-center gap-2 hover:bg-blue-500 transition-all"><RefreshCw size={14}/> Testar Conexão</button>
+            <a href="/upload" className="w-full py-2.5 rounded-xl bg-[#2563EB] text-[13px] font-bold flex items-center justify-center gap-2 hover:bg-blue-500 transition-all cursor-pointer"><RefreshCw size={14}/> Atualizar Dados</a>
           </div>
         </Card>
         <Card>
           <h2 className="text-[16px] font-black mb-4">Sobre o Sistema</h2>
           <div className="space-y-3 text-[13px]">
-            {[["Versão","1.0.0"],["Ambiente","GitHub Codespaces"],["Framework","Next.js + TypeScript"],["UI","TailwindCSS + Recharts"]].map(([k,v])=>(
+            {[["Versão","2.0.0"],["Ambiente","Vercel"],["Framework","Next.js + TypeScript"],["Banco","Firebase Firestore"],["UI","TailwindCSS + Recharts"]].map(([k,v])=>(
               <div key={k} className="flex justify-between py-2 border-b border-white/[0.04]"><span className="text-slate-400">{k}</span><span className="font-medium">{v}</span></div>
             ))}
           </div>
@@ -645,14 +658,134 @@ function VConfig() {
 
 // ─── ROOT ─────────────────────────────────────────────────────────────────────
 export default function Page() {
-  const [clock,setClock]  = useState("");
-  const [nav,setNav]      = useState("Visão Geral");
-  const [ac,sac]          = useState<"Linha"|"Área"|"Barras">("Linha");
+  const [clock,setClock]   = useState("");
+  const [nav,setNav]       = useState("Visão Geral");
+  const [ac,sac]           = useState<"Linha"|"Área"|"Barras">("Linha");
+  const [dashData,setDashData] = useState<DashData|null>(null);
+  const [ultimaAtu,setUltimaAtu] = useState("carregando...");
 
+  // ── Filtros globais ──
+  const [filterUF,setFilterUF]         = useState("Todos");
+  const [filterEsp,setFilterEsp]       = useState("Todas");
+  const [filterStatus,setFilterStatus] = useState("Todos");
+  const [search,setSearch]             = useState("");
+
+  // ── Clock ──
   useEffect(()=>{
     const fmt=()=>setClock(new Date().toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit",second:"2-digit"}));
     fmt(); const id=setInterval(fmt,1000); return()=>clearInterval(id);
   },[]);
+
+  // ── Fetch dados ──
+  useEffect(()=>{
+    const load=async()=>{
+      try {
+        const res=await fetch("/api/dados");
+        const data=await res.json();
+        if(data.resumo){ setDashData(data); setUltimaAtu([data.turno,data.data].filter(Boolean).join(" — ")||data.atualizadoEm||"agora"); }
+      } catch(e){ console.error("Erro:",e); }
+    };
+    load(); const id=setInterval(load,30000); return()=>clearInterval(id);
+  },[]);
+
+  // ── Dados filtrados ──
+  const filteredHospitais = useMemo(()=>{
+    if(!dashData?.hospitais) return [];
+    return dashData.hospitais.filter((h:any)=>{
+      if(filterUF!=="Todos"&&h.uf!==filterUF) return false;
+      if(filterEsp!=="Todas"&&h.especialidade!==filterEsp) return false;
+      if(filterStatus!=="Todos"&&h.status!==filterStatus) return false;
+      if(search&&!`${h.unidade} ${h.uf} ${h.especialidade} ${h.motivo}`.toLowerCase().includes(search.toLowerCase())) return false;
+      return true;
+    });
+  },[dashData,filterUF,filterEsp,filterStatus,search]);
+
+  // ── Resumo filtrado ──
+  const filteredResumo = useMemo(()=>{
+    const h=filteredHospitais;
+    const sorted=[...h].sort((a:any,b:any)=>b.tempoMaximoMin-a.tempoMaximoMin);
+    const tempos=h.filter((x:any)=>x.tempoMaximoMin>0).map((x:any)=>x.tempoMaximoMin);
+    const med=tempos.length?Math.round(tempos.reduce((a:number,b:number)=>a+b,0)/tempos.length):0;
+    return {
+      totalRegistros:h.length,
+      totalAguardando:h.reduce((s:number,x:any)=>s+x.pacientesAguardando,0),
+      totalAtendimento:h.reduce((s:number,x:any)=>s+x.pacientesAtendimento,0),
+      criticos:h.filter((x:any)=>x.status==="Crítico").length,
+      graves:h.filter((x:any)=>x.status==="Grave").length,
+      atencao:h.filter((x:any)=>x.status==="Atenção").length,
+      normais:h.filter((x:any)=>x.status==="Normal").length,
+      tempoMedioFormatado:fromMin(med),
+      maiorEspera:sorted[0]?.tempoMaximo||"00:00",
+      maiorEsperaUnidade:sorted[0]?.unidade||"",
+      maiorEsperaUF:sorted[0]?.uf||"",
+    };
+  },[filteredHospitais]);
+
+  // ── Listas para dropdowns ──
+  const ufs = useMemo(()=>[...new Set((dashData?.hospitais||[]).map((h:any)=>h.uf))].sort(),[dashData]);
+  const especialidades = useMemo(()=>[...new Set((dashData?.hospitais||[]).map((h:any)=>h.especialidade))].sort(),[dashData]);
+
+  // ── Status por UF para o mapa ──
+  const ufStatus = useMemo(()=>{
+    const map:Record<string,string>={};
+    filteredHospitais.forEach((h:any)=>{
+      const cur=map[h.uf];
+      const order=["Normal","Atenção","Grave","Crítico"];
+      if(!cur||order.indexOf(h.status)>order.indexOf(cur)) map[h.uf]=h.status;
+    });
+    return map;
+  },[filteredHospitais]);
+
+  // ── Ranking dinâmico ──
+  const rankingReal = useMemo(()=>{
+    if(!filteredHospitais.length) return [];
+    return [...filteredHospitais]
+      .map((h:any)=>{
+        const timeScore=Math.max(0,100-Math.round(h.tempoMaximoMin*0.7));
+        const queueScore=Math.max(0,100-Math.min(100,h.pacientesAguardando*3));
+        const score=Math.round(timeScore*0.65+queueScore*0.35);
+        return {nome:`${h.unidade} - ${h.uf}`,score,med:h.tempoMaximo||"00:00",agu:h.pacientesAguardando,status:h.status,esp:h.especialidade};
+      })
+      .sort((a:any,b:any)=>b.score-a.score)
+      .slice(0,10)
+      .map((h:any,i:number)=>({...h,pos:i+1,trend:i<3?"up":i>6?"down":"same"}));
+  },[filteredHospitais]);
+
+  // ── Especialidades dinâmicas ──
+  const specialtiesReal = useMemo(()=>{
+    if(!filteredHospitais.length) return [];
+    const groups:Record<string,number[]>={};
+    filteredHospitais.forEach((h:any)=>{
+      if(!groups[h.especialidade]) groups[h.especialidade]=[];
+      if(h.tempoMaximoMin>0) groups[h.especialidade].push(h.tempoMaximoMin);
+    });
+    return Object.entries(groups).map(([name,times])=>{
+      const avg=times.length?Math.round(times.reduce((a,b)=>a+b,0)/times.length):0;
+      const pressure=Math.min(100,Math.round(avg/1.5));
+      const color=pressure>80?"#ef4444":pressure>60?"#fb923c":pressure>40?"#facc15":"#22c55e";
+      return [name,fromMin(avg),color,pressure] as [string,string,string,number];
+    }).sort((a,b)=>(b[3] as number)-(a[3] as number)).slice(0,7);
+  },[filteredHospitais]);
+
+  // ── UF data dinâmico ──
+  const ufDataReal = useMemo(()=>{
+    if(!filteredHospitais.length) return [];
+    const groups:Record<string,any>={};
+    filteredHospitais.forEach((h:any)=>{
+      if(!groups[h.uf]) groups[h.uf]={uf:h.uf,count:0,agu:0,criticos:0,tempos:[]};
+      groups[h.uf].count++;
+      groups[h.uf].agu+=h.pacientesAguardando;
+      if(h.status==="Crítico") groups[h.uf].criticos++;
+      if(h.tempoMaximoMin>0) groups[h.uf].tempos.push(h.tempoMaximoMin);
+    });
+    return Object.values(groups).map((g:any)=>{
+      const avgMin=g.tempos.length?Math.round(g.tempos.reduce((a:number,b:number)=>a+b,0)/g.tempos.length):0;
+      const status=g.criticos>0?"Crítico":avgMin>=90?"Grave":avgMin>=30?"Atenção":"Normal";
+      return {uf:g.uf,hospitais:g.count,agu:g.agu,criticos:g.criticos,med:fromMin(avgMin),status};
+    }).sort((a:any,b:any)=>b.agu-a.agu).slice(0,15);
+  },[filteredHospitais]);
+
+  const filterProps = {search,setSearch,filterUF,setFilterUF,filterEsp,setFilterEsp,filterStatus,setFilterStatus,ufs,especialidades};
 
   return (
     <main className="min-h-screen bg-[#020611] text-white flex overflow-hidden">
@@ -661,7 +794,6 @@ export default function Page() {
         <div className="absolute bottom-[-200px] right-[-100px] w-[700px] h-[700px] rounded-full bg-cyan-500/8 blur-[180px]"/>
       </div>
 
-      {/* SIDEBAR */}
       <aside className="w-[210px] shrink-0 bg-[#030B18]/95 border-r border-white/[0.05] px-4 py-5 flex flex-col relative z-10">
         <div className="flex items-center gap-2 mb-8">
           <div className="w-10 h-10 rounded-xl bg-[#ff6b00] flex items-center justify-center text-lg font-black">✳</div>
@@ -686,7 +818,6 @@ export default function Page() {
         </div>
       </aside>
 
-      {/* CONTENT */}
       <section className="flex-1 px-4 py-4 overflow-auto relative z-10">
         <header className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-4">
@@ -694,7 +825,7 @@ export default function Page() {
             <div className="flex items-center gap-3">
               <h1 className="text-[20px] font-black tracking-tight">Central Operacional — Tempo de Espera Médica</h1>
               <div className="w-2.5 h-2.5 rounded-full bg-green-400 shadow-[0_0_12px_rgba(74,222,128,.9)]"/>
-              <span className="text-slate-400 text-[12px]">Atualizado agora há 30s</span>
+              <span className="text-slate-400 text-[12px]">Atualizado: {ultimaAtu}</span>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -704,11 +835,11 @@ export default function Page() {
           </div>
         </header>
 
-        {nav==="Visão Geral"      && <VGeral ac={ac} sac={sac}/>}
-        {nav==="Operação ao Vivo" && <VOperacao/>}
-        {nav==="Ranking"          && <VRanking/>}
-        {nav==="Especialidades"   && <VEspec/>}
-        {nav==="Estados (UF)"     && <VEstados/>}
+        {nav==="Visão Geral"      && <VGeral ac={ac} sac={sac} fH={filteredHospitais} fR={filteredResumo} ufStatus={ufStatus} specialtiesReal={specialtiesReal} {...filterProps}/>}
+        {nav==="Operação ao Vivo" && <VOperacao fH={filteredHospitais} fR={filteredResumo}/>}
+        {nav==="Ranking"          && <VRanking rankingReal={rankingReal}/>}
+        {nav==="Especialidades"   && <VEspec specialtiesReal={specialtiesReal}/>}
+        {nav==="Estados (UF)"     && <VEstados ufDataReal={ufDataReal} ufStatus={ufStatus}/>}
         {nav==="SLA & Metas"      && <VSLA/>}
         {nav==="Alertas"          && <VAlertas/>}
         {nav==="Relatórios"       && <VRelatorios/>}
