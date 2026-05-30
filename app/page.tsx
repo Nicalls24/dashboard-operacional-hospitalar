@@ -1,957 +1,1155 @@
 "use client";
-import { useState, useEffect } from "react";
+
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
+import { createClient } from "@supabase/supabase-js";
 import {
-  Bell, Activity, Clock3, Hospital, ShieldAlert, Menu, Moon, Map,
-  Stethoscope, Trophy, Settings, Download, HeartPulse, Search,
-  Filter, ChevronDown, AlertTriangle, CheckCircle, XCircle,
-  TrendingUp, TrendingDown, Users, Zap, FileText, BarChart2,
-  PieChart as PieIcon, RefreshCw,
-} from "lucide-react";
-import {
-  ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip,
-  PieChart, Pie, Cell, LineChart, Line, BarChart, Bar, RadarChart,
-  Radar, PolarGrid, PolarAngleAxis, CartesianGrid, ReferenceLine,
+  LineChart, Line, AreaChart, Area, BarChart, Bar,
+  PieChart, Pie, Cell,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from "recharts";
+import {
+  Activity, Clock3, Hospital, ShieldAlert, Bell, Download,
+  Settings, Trophy, Stethoscope, Map, Menu, RefreshCw,
+  Search, AlertTriangle, TrendingUp, TrendingDown, Minus,
+  HeartPulse, ChevronUp, ChevronDown, X, CheckCircle2,
+  FileText, Filter, BarChart2, Users, Zap
+} from "lucide-react";
 
-// ─── TYPES ────────────────────────────────────────────────────────────────────
-interface DashData {
-  resumo: {
-    totalRegistros: number;
-    totalAguardando: number;
-    totalAtendimento: number;
-    tempoMedioFormatado: string;
-    maiorEspera: string;
-    maiorEsperaUnidade: string;
-    maiorEsperaUF: string;
-    criticos: number;
-    graves: number;
-    atencao: number;
-    normais: number;
-  };
-  top10: any[];
-  hospitais: any[];
-  atualizadoEm: string;
-  turno?: string;
-  data?: string;
-}
+const SB_URL = "https://fwdvzsywudpieqlqnxkp.supabase.co";
+const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ3ZHZ6c3l3dWRwaWVxbHFueGtwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg1ODcyNzEsImV4cCI6MjA5NDE2MzI3MX0.SkyfE_HVulz_TyQldI6XpENSJAuu6xDgUEDz4vObKYQ";
+const sb = createClient(SB_URL, SB_KEY);
 
-// ─── DATA ────────────────────────────────────────────────────────────────────
-const sparkData = [{v:4},{v:7},{v:5},{v:8},{v:4},{v:9},{v:6},{v:8},{v:5},{v:10}];
-const lineData = [
-  {t:"15:00",v:48},{t:"17:00",v:41},{t:"19:00",v:35},{t:"21:00",v:46},
-  {t:"23:00",v:33},{t:"01:00",v:22},{t:"03:00",v:18},{t:"05:00",v:20},
-  {t:"07:00",v:26},{t:"09:00",v:31},{t:"11:00",v:19},{t:"13:00",v:24},{t:"15:00",v:34},
-];
-const donutDataMock = [
-  {name:"< 15m",    value:133,pct:"40.7%",color:"#22c55e"},
-  {name:"15m-30m",  value:89, pct:"27.2%",color:"#06b6d4"},
-  {name:"30m-45m",  value:41, pct:"12.5%",color:"#3b82f6"},
-  {name:"45m-1h",   value:32, pct:"9.8%", color:"#facc15"},
-  {name:"1h-1h30",  value:18, pct:"5.5%", color:"#fb923c"},
-  {name:"> 1h30",   value:14, pct:"4.3%", color:"#ef4444"},
-];
-const top10Mock = [
-  ["Hospital Rio Poty - PI","4:53","#ef4444"],
-  ["Hospital Teresa de Lisieux - BA","2:38","#ef4444"],
-  ["PA Derby - PE","2:37","#ef4444"],
-  ["Hosp Notrecare ABC - SP","2:16","#ef4444"],
-  ["Hospital Salvalus - SP","2:09","#ef4444"],
-  ["PA Barueri - SP","1:31","#fb923c"],
-  ["Hospital Ana Lima - CE","1:29","#fb923c"],
-  ["Hosp. Eugenia Pinheiro - CE","1:25","#fb923c"],
-  ["Hosp Keila Ferreira Guarulhos - SP","1:25","#fb923c"],
-  ["CC Cotia 1 - SP","1:23","#fb923c"],
-];
-const specialties = [
-  ["Pediatria","00:31","#ef4444",92],
-  ["Clínica Médica","00:27","#fb923c",84],
-  ["Obstetrícia","00:26","#facc15",76],
-  ["Ortopedia","00:24","#3b82f6",69],
-  ["Ginecologia","00:22","#06b6d4",61],
-  ["Traumatologia","00:21","#22c55e",55],
-  ["Oftalmologia","00:18","#a78bfa",44],
-];
-const tableDataMock = [
-  {uf:"PI",unidade:"Hospital Rio Poty",         esp:"Clínica Médica",agu:3, ate:1,max:"4:53",med:"01:15",status:"Crítico"},
-  {uf:"BA",unidade:"Hospital Teresa de Lisieux",esp:"Obstetrícia",   agu:6, ate:0,max:"2:38",med:"00:58",status:"Crítico"},
-  {uf:"PE",unidade:"PA Derby",                  esp:"Clínica Médica",agu:14,ate:7,max:"2:37",med:"00:47",status:"Grave"},
-  {uf:"SP",unidade:"Hosp Notrecare ABC",        esp:"Pediatria",     agu:11,ate:6,max:"2:16",med:"00:42",status:"Grave"},
-  {uf:"SP",unidade:"Hospital Salvalus",         esp:"Clínica Médica",agu:8, ate:6,max:"2:09",med:"00:40",status:"Grave"},
-  {uf:"SP",unidade:"PA Barueri",                esp:"Pediatria",     agu:5, ate:3,max:"1:31",med:"00:31",status:"Atenção"},
-  {uf:"CE",unidade:"Hospital Ana Lima",         esp:"Clínica Médica",agu:7, ate:4,max:"1:29",med:"00:29",status:"Atenção"},
-  {uf:"CE",unidade:"Hosp. Eugenia Pinheiro",    esp:"Ortopedia",     agu:4, ate:2,max:"1:25",med:"00:27",status:"Atenção"},
-  {uf:"GO",unidade:"Hospital Encore Goiás",     esp:"Clínica Médica",agu:2, ate:5,max:"0:22",med:"00:18",status:"Normal"},
-  {uf:"MG",unidade:"Hosp. Hapvida BH",          esp:"Ortopedia",     agu:3, ate:4,max:"0:18",med:"00:14",status:"Normal"},
-];
-const rankingData = [
-  {pos:1, nome:"Hospital Encore Goiás - GO",    score:98,med:"00:12",agu:2, status:"Normal", trend:"up"},
-  {pos:2, nome:"Hosp. Hapvida BH - MG",         score:95,med:"00:14",agu:3, status:"Normal", trend:"up"},
-  {pos:3, nome:"PA São Paulo Centro - SP",       score:91,med:"00:17",agu:4, status:"Normal", trend:"up"},
-  {pos:4, nome:"Hapvida Fortaleza - CE",         score:87,med:"00:19",agu:5, status:"Normal", trend:"same"},
-  {pos:5, nome:"Clínica Hapvida Recife - PE",    score:83,med:"00:21",agu:6, status:"Normal", trend:"up"},
-  {pos:6, nome:"PA Barueri - SP",                score:72,med:"00:31",agu:5, status:"Atenção",trend:"down"},
-  {pos:7, nome:"Hospital Ana Lima - CE",         score:68,med:"00:29",agu:7, status:"Atenção",trend:"same"},
-  {pos:8, nome:"Hosp. Eugenia Pinheiro - CE",    score:61,med:"00:27",agu:4, status:"Atenção",trend:"down"},
-  {pos:9, nome:"PA Derby - PE",                  score:44,med:"00:47",agu:14,status:"Grave",  trend:"down"},
-  {pos:10,nome:"Hospital Salvalus - SP",         score:41,med:"00:40",agu:8, status:"Grave",  trend:"down"},
-];
-const ufData = [
-  {uf:"SP",hospitais:8, agu:52,criticos:3,med:"00:38",status:"Grave"},
-  {uf:"CE",hospitais:6, agu:34,criticos:2,med:"00:29",status:"Atenção"},
-  {uf:"PE",hospitais:5, agu:38,criticos:2,med:"00:42",status:"Grave"},
-  {uf:"BA",hospitais:4, agu:22,criticos:2,med:"00:51",status:"Crítico"},
-  {uf:"PI",hospitais:2, agu:8, criticos:1,med:"01:15",status:"Crítico"},
-  {uf:"GO",hospitais:3, agu:12,criticos:0,med:"00:18",status:"Normal"},
-  {uf:"MG",hospitais:4, agu:15,criticos:0,med:"00:16",status:"Normal"},
-  {uf:"RJ",hospitais:3, agu:18,criticos:1,med:"00:33",status:"Atenção"},
-  {uf:"AM",hospitais:2, agu:9, criticos:0,med:"00:21",status:"Normal"},
-  {uf:"PA",hospitais:2, agu:7, criticos:0,med:"00:19",status:"Normal"},
-];
-// AJUSTE 3/4/5: meta e SLA atualizados para regra de negócio correta
-const slaData = [
-  {esp:"Clínica Médica",meta:75,real:55,trend:-5},
-  {esp:"Pediatria",     meta:75,real:42,trend:-12},
-  {esp:"Obstetrícia",   meta:75,real:61,trend:2},
-  {esp:"Ortopedia",     meta:75,real:70,trend:4},
-  {esp:"Ginecologia",   meta:75,real:78,trend:6},
-  {esp:"Traumatologia", meta:75,real:83,trend:8},
-  {esp:"Oftalmologia",  meta:75,real:91,trend:3},
-];
-const slaHist = [
-  {mes:"Nov",sla:61},{mes:"Dez",sla:58},{mes:"Jan",sla:63},
-  {mes:"Fev",sla:60},{mes:"Mar",sla:65},{mes:"Abr",sla:68},{mes:"Mai",sla:68},
-];
-
-// AJUSTE 1: dados para a nova aba Relatórios (apenas adicionados, nada removido do original)
-const evolucaoSLA = [
-  {dia:"17/Mai",sla:61,meta:75},{dia:"18/Mai",sla:58,meta:75},{dia:"19/Mai",sla:63,meta:75},
-  {dia:"20/Mai",sla:66,meta:75},{dia:"21/Mai",sla:60,meta:75},{dia:"22/Mai",sla:64,meta:75},
-  {dia:"23/Mai",sla:67,meta:75},{dia:"24/Mai",sla:65,meta:75},{dia:"25/Mai",sla:70,meta:75},
-  {dia:"26/Mai",sla:68,meta:75},{dia:"27/Mai",sla:66,meta:75},{dia:"28/Mai",sla:71,meta:75},
-  {dia:"29/Mai",sla:69,meta:75},{dia:"30/Mai",sla:68,meta:75},
-];
-const relDiario = {data:"29/Mai/2025",totalAtendimentos:1284,dentroDaMeta:886,foraDaMeta:398,indicador:69};
-const relSemanal = [
-  {dia:"Seg",sla:64,meta:75},{dia:"Ter",sla:70,meta:75},{dia:"Qua",sla:66,meta:75},
-  {dia:"Qui",sla:71,meta:75},{dia:"Sex",sla:65,meta:75},{dia:"Sáb",sla:72,meta:75},{dia:"Dom",sla:69,meta:75},
-];
-const relMensal = [
-  {sem:"Sem 1",sla:62,meta:75},{sem:"Sem 2",sla:65,meta:75},
-  {sem:"Sem 3",sla:67,meta:75},{sem:"Sem 4",sla:69,meta:75},
-];
-const comparMeses = [{mes:"Mar",sla:65},{mes:"Abr",sla:68},{mes:"Mai",sla:68}];
-const ufPerf = [...ufData].map(u=>({uf:u.uf,sla:parseInt(u.med.replace(":","."))*10,status:u.status}))
-  .sort((a,b)=>b.sla-a.sla);
-const ufPerfSLA = [
-  {uf:"MG",sla:86},{uf:"GO",sla:83},{uf:"PA",sla:81},{uf:"AM",sla:79},
-  {uf:"CE",sla:70},{uf:"RJ",sla:68},{uf:"SP",sla:58},{uf:"PE",sla:52},{uf:"BA",sla:41},{uf:"PI",sla:28},
-];
-const espPerfSLA = [
-  {esp:"Oftalmologia",sla:91,meta:75},{esp:"Traumatologia",sla:83,meta:75},
-  {esp:"Ginecologia",sla:78,meta:75},{esp:"Ortopedia",sla:70,meta:75},
-  {esp:"Obstetrícia",sla:61,meta:75},{esp:"Clínica Médica",sla:55,meta:75},{esp:"Pediatria",sla:42,meta:75},
-];
-
-const alertasInit = [
-  {id:1, tipo:"Crítico",msg:"Hospital Rio Poty - PI: tempo de espera 4h53 — maior da rede",       hora:"15:24",lido:false},
-  {id:2, tipo:"Crítico",msg:"Hospital Teresa - BA: 6 pacientes aguardando sem atendimento",        hora:"15:21",lido:false},
-  {id:3, tipo:"Crítico",msg:"PA Derby - PE: 14 pacientes na fila — capacidade excedida",           hora:"15:18",lido:false},
-  {id:4, tipo:"Grave",  msg:"Hosp Notrecare ABC - SP: SLA violado nas últimas 2 horas",            hora:"15:10",lido:false},
-  {id:5, tipo:"Grave",  msg:"Hospital Salvalus - SP: médico ausente — Clínica Médica",             hora:"15:05",lido:false},
-  {id:6, tipo:"Grave",  msg:"PA Barueri - SP: tempo médio subiu 8 min na última hora",             hora:"14:58",lido:true},
-  {id:7, tipo:"Atenção",msg:"Hospital Ana Lima - CE: fila aumentando — monitorar",                  hora:"14:45",lido:true},
-  {id:8, tipo:"Atenção",msg:"Hosp. Eugenia Pinheiro - CE: 4 pacientes aguardando ortopedia",       hora:"14:32",lido:true},
-  {id:9, tipo:"Info",   msg:"14 hospitais sincronizados com sucesso",                               hora:"14:00",lido:true},
-  {id:10,tipo:"Info",   msg:"Relatório diário gerado com sucesso",                                  hora:"13:00",lido:true},
-];
-const SC: Record<string,string> = {
-  Crítico:"#ef4444",Grave:"#fb923c",Atenção:"#facc15",Normal:"#22c55e",Info:"#3b82f6",
+type Registro = {
+  id: number; uf: string; nm_local: string; nm_medico: string;
+  ds_especialidade: string; cidade: string; qt_pacientes_aguardando: number;
+  tempo_espera_min: number; tempo_atraso_min: number | null;
+  status: string; atraso: string; hr_registro_espera_min: number;
+  data_agenda: string; dt_registro: string;
 };
-const NAV: [string,any,string?][] = [
-  ["Visão Geral",Activity],["Operação ao Vivo",Clock3],["Ranking",Trophy],
-  ["Especialidades",Stethoscope],["Estados (UF)",Map],["SLA & Metas",ShieldAlert],
-  ["Alertas",Bell,"14"],["Relatórios",Download],["Configurações",Settings],
+
+function minToHM(min: number) {
+  if (!min && min !== 0) return "—";
+  const h = Math.floor(Math.abs(min) / 60);
+  const m = Math.abs(min) % 60;
+  const sign = min < 0 ? "-" : "";
+  return h > 0 ? `${sign}${h}h${m.toString().padStart(2,"0")}` : `${sign}${m}min`;
+}
+
+function statusColor(min: number) {
+  if (min > 60) return "#ef4444";
+  if (min > 30) return "#f97316";
+  if (min > 15) return "#facc15";
+  return "#22c55e";
+}
+
+function statusLabel(min: number) {
+  if (min > 60) return "Crítico";
+  if (min > 30) return "Grave";
+  if (min > 15) return "Atenção";
+  return "Normal";
+}
+
+function statusBg(min: number) {
+  if (min > 60) return "bg-red-500/20 text-red-400";
+  if (min > 30) return "bg-orange-500/20 text-orange-400";
+  if (min > 15) return "bg-yellow-500/20 text-yellow-400";
+  return "bg-green-500/20 text-green-400";
+}
+
+const NAV = [
+  { id: "visao", label: "Visão Geral", icon: Activity },
+  { id: "vivo", label: "Operação ao Vivo", icon: Clock3 },
+  { id: "ranking", label: "Ranking", icon: Trophy },
+  { id: "especialidades", label: "Especialidades", icon: Stethoscope },
+  { id: "estados", label: "Estados (UF)", icon: Map },
+  { id: "sla", label: "SLA & Metas", icon: ShieldAlert },
+  { id: "alertas", label: "Alertas", icon: Bell },
+  { id: "relatorios", label: "Relatórios", icon: Download },
+  { id: "configuracoes", label: "Configurações", icon: Settings },
 ];
 
-// ─── ATOMS ───────────────────────────────────────────────────────────────────
-function Spark({color}:{color:string}) {
-  return (
-    <ResponsiveContainer width="100%" height="100%">
-      <LineChart data={sparkData}><Line type="monotone" dataKey="v" stroke={color} strokeWidth={2} dot={false}/></LineChart>
-    </ResponsiveContainer>
-  );
-}
-function KPI({title,value,color,icon,trend,sub}:any) {
-  return (
-    <div className="relative overflow-hidden rounded-[20px] border border-white/[0.06] bg-[#06111F]/95 p-4 flex flex-col gap-3" style={{boxShadow:`0 16px 40px ${color}12`}}>
-      <div className="absolute inset-0 opacity-25 pointer-events-none" style={{background:`radial-gradient(circle at top right,${color}35,transparent 55%)`}}/>
-      <div className="relative z-10 flex items-start justify-between">
-        <div className="w-11 h-11 rounded-xl flex items-center justify-center" style={{background:`${color}20`}}><span style={{color}}>{icon}</span></div>
-        <div className="w-20 h-7"><Spark color={color}/></div>
-      </div>
-      <div className="relative z-10">
-        <p className="text-slate-400 text-[13px]">{title}</p>
-        <h2 className="text-[32px] leading-none font-black tracking-tight mt-1">{value}</h2>
-        <div className="flex items-center gap-2 mt-2">
-          <span className="text-[11px] font-bold" style={{color}}>▲ {trend}</span>
-          <span className="text-[11px] text-slate-500">{sub}</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-function Badge({status}:{status:string}) {
-  const c=SC[status]??"#888";
-  return <span className="px-3 py-1 rounded-full text-[11px] font-bold whitespace-nowrap" style={{background:`${c}20`,color:c,border:`1px solid ${c}40`}}>{status}</span>;
-}
-function Tiny({color="#ef4444"}:{color?:string}) {
-  const d=[3,5,4,7,6,8,5,9].map(v=>({v}));
-  return <div className="w-16 h-7"><ResponsiveContainer width="100%" height="100%"><LineChart data={d}><Line type="monotone" dataKey="v" stroke={color} strokeWidth={1.5} dot={false}/></LineChart></ResponsiveContainer></div>;
-}
-function Card({children,className=""}:{children:React.ReactNode;className?:string}) {
-  return <div className={`rounded-[20px] border border-white/[0.06] bg-[#071220]/95 p-4 ${className}`}>{children}</div>;
-}
-function Title({t,s}:{t:string;s?:string}) {
-  return <div className="mb-4"><h1 className="text-[26px] font-black tracking-tight">{t}</h1>{s&&<p className="text-slate-400 text-[14px] mt-1">{s}</p>}</div>;
-}
-function BrazilMap() {
-  return (
-    <svg viewBox="0 0 580 580" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
-      <path d="M70 90 L180 70 L280 80 L320 110 L310 160 L280 200 L220 230 L160 240 L100 220 L60 180 Z" fill="#22c55e" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M180 40 L240 30 L270 60 L280 80 L180 70 Z" fill="#22c55e" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M280 80 L370 60 L400 90 L390 130 L360 160 L320 150 L310 110 Z" fill="#22c55e" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M370 60 L430 65 L460 90 L450 130 L410 155 L390 130 L400 90 Z" fill="#fb923c" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M430 65 L500 60 L530 80 L540 120 L510 155 L470 160 L450 130 L460 90 Z" fill="#ef4444" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M310 160 L360 160 L390 130 L410 155 L400 210 L370 250 L330 260 L290 240 L280 200 Z" fill="#facc15" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M410 155 L450 130 L470 160 L510 155 L520 200 L490 260 L440 290 L400 270 L380 240 L400 210 Z" fill="#ef4444" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M160 240 L220 230 L280 200 L290 240 L270 290 L230 310 L180 300 L150 270 Z" fill="#22c55e" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M230 310 L270 290 L290 240 L330 260 L340 310 L310 350 L270 360 L240 340 Z" fill="#facc15" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M370 250 L400 270 L440 290 L450 340 L420 380 L380 390 L340 370 L330 330 L340 310 L370 290 Z" fill="#fb923c" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M450 340 L490 320 L510 355 L490 390 L460 400 L440 380 L420 380 Z" fill="#ef4444" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M310 350 L340 370 L380 390 L390 430 L360 460 L320 450 L290 420 L290 390 Z" fill="#ef4444" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M290 420 L320 450 L350 470 L340 500 L300 510 L270 490 L260 460 Z" fill="#fb923c" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M270 490 L300 510 L310 530 L280 545 L255 530 L250 510 Z" fill="#22c55e" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M250 510 L255 530 L280 545 L270 570 L240 575 L210 560 L200 535 L220 515 Z" fill="#22c55e" stroke="#0a1a2e" strokeWidth="2"/>
-      <path d="M100 270 L150 270 L180 300 L170 340 L130 350 L90 330 L80 290 Z" fill="#22c55e" stroke="#0a1a2e" strokeWidth="2"/>
-    </svg>
-  );
-}
+const BRAZIL_PATHS: Record<string, { path: string; label: string; cx: number; cy: number }> = {
+  AM: { path: "M70 90 L180 70 L280 80 L320 110 L310 160 L280 200 L220 230 L160 240 L100 220 L60 180 Z", label: "Amazonas", cx: 170, cy: 165 },
+  RR: { path: "M180 40 L240 30 L270 60 L280 80 L180 70 Z", label: "Roraima", cx: 218, cy: 55 },
+  AP: { path: "M280 40 L320 35 L330 60 L310 70 L285 65 Z", label: "Amapá", cx: 308, cy: 52 },
+  PA: { path: "M160 240 L220 230 L280 200 L290 240 L270 290 L230 310 L180 300 L150 270 Z", label: "Pará", cx: 208, cy: 268 },
+  MA: { path: "M280 80 L370 60 L400 90 L390 130 L360 160 L320 150 L310 110 Z", label: "Maranhão", cx: 340, cy: 115 },
+  PI: { path: "M360 160 L400 150 L420 170 L410 210 L380 220 L355 200 Z", label: "Piauí", cx: 388, cy: 185 },
+  CE: { path: "M370 60 L430 65 L460 90 L450 130 L410 155 L390 130 L400 90 Z", label: "Ceará", cx: 418, cy: 105 },
+  RN: { path: "M450 90 L480 85 L495 105 L480 130 L455 130 L450 110 Z", label: "R. Norte", cx: 473, cy: 108 },
+  PB: { path: "M455 130 L480 130 L490 145 L465 160 L450 148 Z", label: "Paraíba", cx: 468, cy: 143 },
+  PE: { path: "M430 65 L500 60 L530 80 L540 120 L510 155 L470 160 L450 130 L460 90 Z", label: "Pernambuco", cx: 488, cy: 108 },
+  AL: { path: "M480 160 L515 158 L520 175 L495 185 L475 178 Z", label: "Alagoas", cx: 497, cy: 170 },
+  SE: { path: "M490 180 L520 175 L528 195 L505 205 L488 195 Z", label: "Sergipe", cx: 507, cy: 190 },
+  BA: { path: "M410 155 L450 130 L470 160 L510 155 L520 200 L490 260 L440 290 L400 270 L380 240 L400 210 Z", label: "Bahia", cx: 453, cy: 215 },
+  TO: { path: "M310 160 L355 155 L360 160 L355 200 L380 220 L370 250 L330 260 L290 240 L280 200 Z", label: "Tocantins", cx: 325, cy: 205 },
+  GO: { path: "M290 240 L330 260 L340 310 L310 350 L270 360 L240 340 L230 310 L270 290 Z", label: "Goiás", cx: 282, cy: 317 },
+  MT: { path: "M100 220 L160 240 L150 270 L180 300 L170 340 L130 350 L90 330 L80 290 Z", label: "Mato Grosso", cx: 125, cy: 295 },
+  RO: { path: "M70 230 L100 220 L80 290 L90 330 L55 325 L45 280 Z", label: "Rondônia", cx: 70, cy: 283 },
+  AC: { path: "M45 280 L55 325 L35 335 L20 310 L30 280 Z", label: "Acre", cx: 36, cy: 305 },
+  MG: { path: "M370 250 L400 270 L440 290 L450 340 L420 380 L380 390 L340 370 L330 330 L340 310 Z", label: "Minas Gerais", cx: 390, cy: 330 },
+  MS: { path: "M230 310 L270 290 L240 340 L270 360 L260 400 L230 410 L195 390 L200 350 Z", label: "Mato G. Sul", cx: 232, cy: 360 },
+  SP: { path: "M310 350 L340 370 L380 390 L390 430 L360 460 L320 450 L290 420 L290 390 Z", label: "São Paulo", cx: 337, cy: 415 },
+  RJ: { path: "M450 340 L490 320 L510 355 L490 390 L460 400 L440 380 L420 380 Z", label: "Rio de Jan.", cx: 470, cy: 360 },
+  ES: { path: "M445 300 L470 295 L485 320 L465 340 L445 330 Z", label: "Espírito Santo", cx: 463, cy: 317 },
+  PR: { path: "M260 400 L290 390 L290 420 L320 450 L310 480 L280 490 L250 470 L235 445 Z", label: "Paraná", cx: 278, cy: 437 },
+  SC: { path: "M250 470 L280 490 L295 510 L275 525 L250 520 L235 505 Z", label: "Santa Catar.", cx: 265, cy: 497 },
+  RS: { path: "M235 505 L250 520 L260 545 L235 555 L205 545 L195 525 L210 505 Z", label: "Rio G. Sul", cx: 228, cy: 528 },
+  DF: { path: "M318 308 L328 308 L328 318 L318 318 Z", label: "DF", cx: 323, cy: 313 },
+};
 
-// ─── VIEWS ────────────────────────────────────────────────────────────────────
-function VGeral({ac,sac,dash}:any) {
-  const r = dash?.resumo;
-  const tot = r?.totalRegistros || 1;
+export default function Dashboard() {
+  const [data, setData] = useState<Registro[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [lastUpdate, setLastUpdate] = useState("");
+  const [activeSection, setActiveSection] = useState("visao");
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [refreshInterval, setRefreshInterval] = useState(60);
+  const [slaThreshold, setSlaThreshold] = useState(30);
+  const [alertsEnabled, setAlertsEnabled] = useState(true);
 
-  const t10 = dash?.top10?.slice(0,10).map((h:any) => [
-    `${h.unidade} - ${h.uf}`,
-    h.tempoMaximo,
-    h.status==="Crítico"?"#ef4444":h.status==="Grave"?"#fb923c":"#facc15"
-  ]) || top10Mock;
+  // Filters for main table
+  const [searchQ, setSearchQ] = useState("");
+  const [filterUF, setFilterUF] = useState("Todos");
+  const [filterEsp, setFilterEsp] = useState("Todas");
+  const [filterStatus, setFilterStatus] = useState("Todos");
+  const [sortBy, setSortBy] = useState<"tempo_espera_min" | "qt_pacientes_aguardando" | "nm_local">("tempo_espera_min");
+  const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 25;
 
-  const tbl = dash?.hospitais?.map((h:any) => ({
-    uf: h.uf, unidade: h.unidade, esp: h.especialidade,
-    agu: h.pacientesAguardando, ate: h.pacientesAtendimento,
-    max: h.tempoMaximo, med: "-", status: h.status,
-  })) || tableDataMock;
+  // Vivo section
+  const [vivoSearchQ, setVivoSearchQ] = useState("");
+  const [vivoFilterUF, setVivoFilterUF] = useState("Todos");
+  const [vivoFilterStatus, setVivoFilterStatus] = useState("Todos");
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  const donut = r ? [
-    {name:"Normal",  value:r.normais,  pct:`${Math.round(r.normais/tot*100)}%`,  color:"#22c55e"},
-    {name:"Atenção", value:r.atencao,  pct:`${Math.round(r.atencao/tot*100)}%`,  color:"#06b6d4"},
-    {name:"Grave",   value:r.graves,   pct:`${Math.round(r.graves/tot*100)}%`,   color:"#fb923c"},
-    {name:"Crítico", value:r.criticos, pct:`${Math.round(r.criticos/tot*100)}%`, color:"#ef4444"},
-  ] : donutDataMock;
+  // Ranking filter
+  const [rankingType, setRankingType] = useState<"local" | "uf" | "especialidade">("local");
 
-  const totalDonut = r?.totalRegistros || 327;
+  // States section
+  const [selectedUF, setSelectedUF] = useState<string | null>(null);
 
-  return (
-    <>
-      <div className="grid grid-cols-6 gap-3 mb-3">
-        <KPI title="Pacientes Aguardando" value={String(r?.totalAguardando ?? 327)}   trend="12%"      sub="vs último período" color="#8B5CF6" icon={<Hospital size={20}/>}/>
-        <KPI title="Em Atendimento"       value={String(r?.totalAtendimento ?? 184)}  trend="8%"       sub="vs último período" color="#3B82F6" icon={<Activity size={20}/>}/>
-        <KPI title="Tempo Médio"          value={r?.tempoMedioFormatado ?? "00:28"}   trend="5 min"    sub="vs último período" color="#F59E0B" icon={<Clock3 size={20}/>}/>
-        <KPI title="Maior Espera"         value={r?.maiorEspera ?? "04:53"}           trend={r?.maiorEsperaUnidade ?? "Rio Poty"} sub={r?.maiorEsperaUF ?? "PI"} color="#EF4444" icon={<ShieldAlert size={20}/>}/>
-        <KPI title="Hospitais Críticos"   value={String(r?.criticos ?? 14)}           trend="3 novos"  sub="críticos"          color="#EF4444" icon={<Bell size={20}/>}/>
-        {/* AJUSTE 3/5: label e sub atualizados para nova regra — SLA ≤15min, meta 75% */}
-        <KPI title="SLA ≤ 15 min"         value="68,5%"                               trend="Meta: 75%" sub="≤ 15 min"          color="#22C55E" icon={<ShieldAlert size={20}/>}/>
-      </div>
-      <div className="grid grid-cols-12 gap-3 mb-3">
-        <Card className="col-span-4 relative overflow-hidden">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(37,99,235,.12),transparent_50%)]"/>
-          <div className="relative z-10">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-[16px] font-black">Mapa de Criticidade por Estado</h2>
-              <div className="flex flex-col gap-1">{["+","−","⤢"].map(b=><button key={b} className="w-8 h-8 rounded-lg bg-white/[0.04] border border-white/[0.06] flex items-center justify-center text-sm">{b}</button>)}</div>
-            </div>
-            <div className="rounded-[16px] border border-white/[0.06] bg-[#030D1A] h-[300px] relative flex items-center justify-center p-2 overflow-hidden">
-              <div className="relative z-10 w-full h-full flex items-center justify-center"><BrazilMap/></div>
-              <div className="absolute left-3 bottom-3 space-y-1.5">
-                {[["Crítico (>1h)","#EF4444"],["Grave (30m-1h)","#F97316"],["Atenção (15m-30m)","#FACC15"],["Normal (<15m)","#22C55E"]].map(([l,c])=>(
-                  <div key={l} className="flex items-center gap-2"><div className="w-3 h-3 rounded-sm" style={{background:c}}/><span className="text-[11px] text-slate-300">{l}</span></div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </Card>
-        <Card className="col-span-4">
-          <h2 className="text-[16px] font-black mb-3">Top 10 Maiores Tempos de Espera</h2>
-          <div className="space-y-2">
-            {t10.map(([n,t,c]:any,i:number)=>(
-              <div key={i} className="flex items-center justify-between rounded-xl bg-white/[0.03] px-3 py-2 border border-white/[0.03]">
-                <div className="flex items-center gap-3">
-                  <div className="w-7 h-7 rounded-lg bg-white/[0.05] flex items-center justify-center text-[12px] text-slate-400">{i+1}</div>
-                  <span className="text-[13px] text-slate-200">{n}</span>
-                </div>
-                <span className="text-[20px] font-black" style={{color:c}}>{t}</span>
-              </div>
-            ))}
-          </div>
-        </Card>
-        <Card className="col-span-4">
-          <h2 className="text-[16px] font-black mb-3">Distribuição por Tempo de Espera</h2>
-          <div className="flex items-center h-[300px] gap-2">
-            <div className="w-[55%] h-full relative">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart><Pie data={donut} dataKey="value" innerRadius={65} outerRadius={105} paddingAngle={2} stroke="transparent">{donut.map((e:any,i:number)=><Cell key={i} fill={e.color}/>)}</Pie></PieChart>
-              </ResponsiveContainer>
-              <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                <span className="text-[44px] font-black leading-none">{totalDonut}</span>
-                <span className="text-slate-400 text-[12px]">Total</span>
-              </div>
-            </div>
-            <div className="w-[45%] space-y-3">
-              {[...donut].reverse().map((item:any,i:number)=>(
-                <div key={i} className="flex items-center justify-between">
-                  <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full" style={{background:item.color}}/><span className="text-[12px] text-slate-300">{item.name}</span></div>
-                  <div><span className="font-bold text-[13px] mr-1">{item.value}</span><span className="text-slate-500 text-[11px]">({item.pct})</span></div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </Card>
-      </div>
-      <div className="grid grid-cols-12 gap-3 mb-3">
-        <Card className="col-span-8">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-[16px] font-black">Evolução do Tempo Médio de Espera</h2>
-            <div className="flex items-center gap-2">
-              <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/[0.06] bg-white/[0.03] text-[12px] text-slate-300">Últimas 24 horas <ChevronDown size={12}/></button>
-              {(["Linha","Área","Barras"] as const).map(m=>(
-                <button key={m} onClick={()=>sac(m)} className={`px-3 py-1.5 rounded-lg text-[12px] transition-all ${ac===m?"bg-[#2563EB]":"bg-white/[0.04] text-slate-400"}`}>{m}</button>
-              ))}
-            </div>
-          </div>
-          <div className="h-[220px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={lineData} margin={{left:0,right:8,top:4,bottom:0}}>
-                <defs><linearGradient id="gB" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#2563EB" stopOpacity={0.4}/><stop offset="100%" stopColor="#2563EB" stopOpacity={0}/></linearGradient></defs>
-                <XAxis dataKey="t" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}}/>
-                <YAxis stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}} tickFormatter={v=>`${v} min`} domain={[0,65]} ticks={[0,15,30,45,60]} width={45}/>
-                {/* AJUSTE 5: linha de referência SLA=15min */}
-                <ReferenceLine y={15} stroke="#facc15" strokeDasharray="4 3" label={{value:"SLA 15min",fill:"#facc15",fontSize:10,position:"insideTopRight"}}/>
-                <Tooltip contentStyle={{background:"#081120",border:"1px solid rgba(255,255,255,.06)",borderRadius:"12px",color:"#fff",fontSize:12}} formatter={(v:any)=>[`${v} min`,"Tempo médio"]}/>
-                <Area type="monotone" dataKey="v" stroke="#3B82F6" strokeWidth={2.5} fill="url(#gB)" dot={{r:3,fill:"#3B82F6"}} activeDot={{r:5}}/>
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-        <Card className="col-span-4">
-          <div className="flex items-center gap-2 mb-4"><h2 className="text-[16px] font-black">Por Especialidade</h2><span className="text-slate-400 text-[11px]">(média de espera)</span></div>
-          <div className="space-y-4">
-            {specialties.map(([n,t,c,p],i)=>(
-              <div key={i}>
-                <div className="flex items-center justify-between mb-1"><span className="text-[13px]">{n as string}</span><span className="text-slate-400 text-[12px]">{t as string}</span></div>
-                <div className="h-2 rounded-full bg-white/[0.05] overflow-hidden"><div className="h-full rounded-full" style={{width:`${p as number}%`,background:c as string,boxShadow:`0 0 12px ${c as string}80`}}/></div>
-              </div>
-            ))}
-          </div>
-        </Card>
-      </div>
-      <Card>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-[16px] font-black">Hospitais em Tempo Real</h2>
-          <div className="flex items-center gap-2">
-            <div className="relative"><Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/><input type="text" placeholder="Buscar hospital, unidade ou especialidade..." className="bg-white/[0.03] border border-white/[0.06] rounded-xl pl-9 pr-4 py-2 text-[13px] text-slate-300 placeholder-slate-500 outline-none focus:border-blue-500/50 w-72"/></div>
-            <button className="flex items-center gap-2 px-3 py-2 rounded-xl border border-white/[0.06] bg-white/[0.03] text-[13px] text-slate-300"><Filter size={14}/> Filtros</button>
-            <button className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-white/[0.06] bg-white/[0.03] text-[13px] text-slate-300">Todas UF <ChevronDown size={12}/></button>
-            <button className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-white/[0.06] bg-white/[0.03] text-[13px] text-slate-300">Todas Especialidades <ChevronDown size={12}/></button>
-            <button className="flex items-center gap-2 px-3 py-2 rounded-xl border border-white/[0.06] bg-white/[0.03] text-[13px] text-slate-300"><Download size={14}/> Exportar</button>
-          </div>
-        </div>
-        <table className="w-full">
-          <thead><tr className="border-b border-white/[0.06]">{["UF","Unidade","Especialidade","Aguardando","Em Atendimento","Tempo Máximo","Média Espera","Status","Tendência"].map(h=><th key={h} className="text-left pb-3 pr-4 text-[12px] text-slate-400 font-medium whitespace-nowrap">{h}</th>)}</tr></thead>
-          <tbody>{tbl.map((r:any,i:number)=><tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02] transition-colors"><td className="py-2.5 pr-4 text-[13px] font-bold text-slate-300">{r.uf}</td><td className="py-2.5 pr-4 text-[13px]">{r.unidade}</td><td className="py-2.5 pr-4 text-[13px] text-slate-300">{r.esp}</td><td className="py-2.5 pr-4 text-[13px] font-bold">{r.agu}</td><td className="py-2.5 pr-4 text-[13px]">{r.ate}</td><td className="py-2.5 pr-4 text-[13px] font-bold" style={{color:SC[r.status]}}>{r.max}</td><td className="py-2.5 pr-4 text-[13px]">{r.med}</td><td className="py-2.5 pr-4"><Badge status={r.status}/></td><td className="py-2.5"><Tiny color={SC[r.status]}/></td></tr>)}</tbody>
-        </table>
-      </Card>
-    </>
-  );
-}
+  // Especialidades section
+  const [espSearch, setEspSearch] = useState("");
 
-function VOperacao({dash}:any) {
-  const r = dash?.resumo;
-  const tbl = dash?.hospitais?.map((h:any) => ({
-    uf:h.uf, unidade:h.unidade, esp:h.especialidade,
-    agu:h.pacientesAguardando, ate:h.pacientesAtendimento,
-    max:h.tempoMaximo, med:"-", status:h.status,
-  })) || tableDataMock;
+  // Alertas section
+  const [alertasType, setAlertasType] = useState<"critico" | "atraso" | "falta">("critico");
 
-  return (
-    <>
-      <Title t="Operação ao Vivo" s="Monitoramento em tempo real · atualiza a cada 30s"/>
-      <div className="grid grid-cols-4 gap-3 mb-3">
-        {[
-          {l:"Hospitais Online",v:String(r?.totalRegistros ?? 47),   i:<Zap size={18}/>,        c:"#22c55e"},
-          {l:"Críticos",        v:String(r?.criticos ?? 14),         i:<AlertTriangle size={18}/>,c:"#ef4444"},
-          {l:"Total na Fila",   v:String(r?.totalAguardando ?? 327), i:<Users size={18}/>,       c:"#8b5cf6"},
-          {l:"Atendidos hoje",  v:"1.284",                           i:<CheckCircle size={18}/>, c:"#06b6d4"},
-        ].map((k,i)=>(
-          <Card key={i} className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl flex items-center justify-center" style={{background:`${k.c}20`}}><span style={{color:k.c}}>{k.i}</span></div>
-            <div><p className="text-slate-400 text-[12px]">{k.l}</p><p className="text-[28px] font-black leading-none mt-0.5">{k.v}</p></div>
-          </Card>
-        ))}
-      </div>
-      <div className="grid grid-cols-12 gap-3">
-        <Card className="col-span-8">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-[16px] font-black">Hospitais — Situação Agora</h2>
-            <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-green-400 animate-pulse"/><span className="text-[12px] text-slate-400">LIVE</span></div>
-          </div>
-          <table className="w-full">
-            <thead><tr className="border-b border-white/[0.06]">{["UF","Unidade","Especialidade","Fila","Atend.","Máx","Média","Status"].map(h=><th key={h} className="text-left pb-2 pr-3 text-[11px] text-slate-400 font-medium">{h}</th>)}</tr></thead>
-            <tbody>{tbl.map((r:any,i:number)=><tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02]"><td className="py-2 pr-3 text-[12px] font-bold text-slate-300">{r.uf}</td><td className="py-2 pr-3 text-[12px]">{r.unidade}</td><td className="py-2 pr-3 text-[12px] text-slate-400">{r.esp}</td><td className="py-2 pr-3 text-[12px] font-black" style={{color:r.agu>8?"#ef4444":r.agu>4?"#fb923c":"#22c55e"}}>{r.agu}</td><td className="py-2 pr-3 text-[12px]">{r.ate}</td><td className="py-2 pr-3 text-[12px] font-bold" style={{color:SC[r.status]}}>{r.max}</td><td className="py-2 pr-3 text-[12px]">{r.med}</td><td className="py-2"><Badge status={r.status}/></td></tr>)}</tbody>
-          </table>
-        </Card>
-        <Card className="col-span-4">
-          <h2 className="text-[16px] font-black mb-3">Fila por Estado</h2>
-          <div className="h-[340px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={ufData.slice(0,7)} layout="vertical" margin={{left:8,right:16}}>
-                <XAxis type="number" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}}/>
-                <YAxis dataKey="uf" type="category" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#94a3b8"}} width={28}/>
-                <Tooltip contentStyle={{background:"#081120",border:"1px solid rgba(255,255,255,.06)",borderRadius:"12px",color:"#fff",fontSize:12}}/>
-                <Bar dataKey="agu" fill="#3b82f6" radius={[0,4,4,0]} name="Aguardando"/>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-      </div>
-    </>
-  );
-}
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    const { data: rows } = await sb
+      .from("espera")
+      .select("*")
+      .order("tempo_espera_min", { ascending: false });
+    if (rows) {
+      setData(rows as Registro[]);
+      setLastUpdate(new Date().toLocaleTimeString("pt-BR"));
+    }
+    setLoading(false);
+  }, []);
 
-function VRanking() {
-  return (
-    <>
-      <Title t="Ranking de Hospitais" s="Classificação por performance e SLA"/>
-      <div className="grid grid-cols-3 gap-3 mb-4">
-        {rankingData.slice(0,3).map((r,i)=>(
-          <Card key={i} className="text-center relative overflow-hidden">
-            <div className="absolute inset-0 opacity-10" style={{background:`radial-gradient(circle at center,${["#facc15","#94a3b8","#b45309"][i]},transparent 60%)`}}/>
-            <div className="relative z-10">
-              <div className="text-[40px] mb-2">{["🥇","🥈","🥉"][i]}</div>
-              <p className="text-[13px] text-slate-300 font-medium mb-1">{r.nome}</p>
-              <div className="text-[42px] font-black" style={{color:["#facc15","#94a3b8","#b45309"][i]}}>{r.score}</div>
-              <p className="text-slate-400 text-[12px]">Score de performance</p>
-              <div className="mt-3 flex justify-center gap-3 text-[12px]">
-                <span className="text-slate-400">Média: <span className="text-white font-bold">{r.med}</span></span>
-                <span className="text-slate-400">Fila: <span className="text-white font-bold">{r.agu}</span></span>
-              </div>
-            </div>
-          </Card>
-        ))}
-      </div>
-      <Card>
-        <h2 className="text-[16px] font-black mb-4">Classificação Completa</h2>
-        <table className="w-full">
-          <thead><tr className="border-b border-white/[0.06]">{["Pos","Hospital","Score","Média","Fila","Status","Tendência"].map(h=><th key={h} className="text-left pb-3 pr-4 text-[12px] text-slate-400 font-medium">{h}</th>)}</tr></thead>
-          <tbody>{rankingData.map((r,i)=>(
-            <tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
-              <td className="py-3 pr-4"><div className="w-8 h-8 rounded-lg flex items-center justify-center text-[13px] font-black" style={{background:i<3?[`#facc1520`,`#94a3b820`,`#b4590920`][i]:"rgba(255,255,255,.04)",color:i<3?["#facc15","#94a3b8","#b45309"][i]:"#64748b"}}>{r.pos}</div></td>
-              <td className="py-3 pr-4 text-[13px]">{r.nome}</td>
-              <td className="py-3 pr-4"><div className="flex items-center gap-2"><div className="h-2 rounded-full bg-white/[0.05] overflow-hidden w-20"><div className="h-full rounded-full" style={{width:`${r.score}%`,background:r.score>90?"#22c55e":r.score>70?"#06b6d4":r.score>50?"#facc15":"#ef4444"}}/></div><span className="text-[13px] font-bold">{r.score}</span></div></td>
-              <td className="py-3 pr-4 text-[13px]">{r.med}</td>
-              <td className="py-3 pr-4 text-[13px]">{r.agu}</td>
-              <td className="py-3 pr-4"><Badge status={r.status}/></td>
-              <td className="py-3">{r.trend==="up"&&<span className="text-green-400 text-[12px] font-bold flex items-center gap-1"><TrendingUp size={14}/>Subindo</span>}{r.trend==="down"&&<span className="text-red-400 text-[12px] font-bold flex items-center gap-1"><TrendingDown size={14}/>Caindo</span>}{r.trend==="same"&&<span className="text-slate-400 text-[12px]">Estável</span>}</td>
-            </tr>
-          ))}</tbody>
-        </table>
-      </Card>
-    </>
-  );
-}
+  useEffect(() => { loadData(); }, [loadData]);
 
-function VEspec() {
-  return (
-    <>
-      <Title t="Por Especialidade" s="Análise de tempo de espera por área médica"/>
-      <div className="grid grid-cols-4 gap-3 mb-3">
-        {specialties.map(([n,t,c,p],i)=>(
-          <Card key={i}>
-            <div className="flex items-start justify-between mb-3">
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{background:`${c as string}20`}}><Stethoscope size={18} style={{color:c as string}}/></div>
-              <Badge status={(p as number)>80?"Crítico":(p as number)>65?"Grave":(p as number)>50?"Atenção":"Normal"}/>
-            </div>
-            <p className="text-slate-400 text-[12px]">{n as string}</p>
-            <p className="text-[28px] font-black mt-1">{t as string}</p>
-            <div className="mt-3 h-2 rounded-full bg-white/[0.05] overflow-hidden"><div className="h-full rounded-full" style={{width:`${p as number}%`,background:c as string,boxShadow:`0 0 10px ${c as string}80`}}/></div>
-            <p className="text-slate-500 text-[11px] mt-1">Pressão: {p as number}%</p>
-          </Card>
-        ))}
-      </div>
-      <div className="grid grid-cols-12 gap-3">
-        <Card className="col-span-7">
-          <h2 className="text-[16px] font-black mb-3">Pressão de Fila por Especialidade</h2>
-          <div className="h-[260px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={specialties.map(([n,,c,p])=>({name:(n as string).substring(0,9),v:p as number}))} margin={{left:0,right:8}}>
-                <XAxis dataKey="name" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}}/>
-                <YAxis stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}} domain={[0,100]}/>
-                <Tooltip contentStyle={{background:"#081120",border:"1px solid rgba(255,255,255,.06)",borderRadius:"12px",color:"#fff",fontSize:12}}/>
-                <Bar dataKey="v" radius={[6,6,0,0]} name="Pressão">{specialties.map(([,,c],i)=><Cell key={i} fill={c as string}/>)}</Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-        <Card className="col-span-5">
-          <h2 className="text-[16px] font-black mb-3">Radar de Especialidades</h2>
-          <div className="h-[260px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <RadarChart data={specialties.map(([n,,,p])=>({esp:(n as string).substring(0,6),val:p as number}))}>
-                <PolarGrid stroke="#1e3a5f"/>
-                <PolarAngleAxis dataKey="esp" tick={{fill:"#64748b",fontSize:11}}/>
-                <Radar name="Pressão" dataKey="val" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.25}/>
-              </RadarChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-      </div>
-    </>
-  );
-}
+  useEffect(() => {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    if (autoRefresh) {
+      intervalRef.current = setInterval(loadData, refreshInterval * 1000);
+    }
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, [autoRefresh, refreshInterval, loadData]);
 
-function VEstados() {
-  return (
-    <>
-      <Title t="Por Estado (UF)" s="Visão consolidada por unidade federativa"/>
-      <div className="grid grid-cols-12 gap-3">
-        <Card className="col-span-4 relative overflow-hidden">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(37,99,235,.12),transparent_50%)]"/>
-          <h2 className="text-[16px] font-black mb-3 relative z-10">Mapa de Criticidade</h2>
-          <div className="rounded-[16px] border border-white/[0.06] bg-[#030D1A] h-[360px] relative flex items-center justify-center p-2 overflow-hidden">
-            <div className="relative z-10 w-full h-full flex items-center justify-center"><BrazilMap/></div>
-          </div>
-        </Card>
-        <Card className="col-span-8">
-          <h2 className="text-[16px] font-black mb-3">Desempenho por UF</h2>
-          <table className="w-full">
-            <thead><tr className="border-b border-white/[0.06]">{["UF","Hospitais","Aguardando","Críticos","Média Espera","Status"].map(h=><th key={h} className="text-left pb-3 pr-4 text-[12px] text-slate-400 font-medium">{h}</th>)}</tr></thead>
-            <tbody>{ufData.map((r,i)=><tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02]"><td className="py-3 pr-4"><span className="text-[16px] font-black" style={{color:SC[r.status]}}>{r.uf}</span></td><td className="py-3 pr-4 text-[13px]">{r.hospitais}</td><td className="py-3 pr-4 text-[13px] font-bold">{r.agu}</td><td className="py-3 pr-4 text-[13px] font-bold" style={{color:r.criticos>0?"#ef4444":"#22c55e"}}>{r.criticos}</td><td className="py-3 pr-4 text-[13px]">{r.med}</td><td className="py-3"><Badge status={r.status}/></td></tr>)}</tbody>
-          </table>
-        </Card>
-      </div>
-    </>
-  );
-}
+  // Derived data
+  const ufs = useMemo(() => ["Todos", ...Array.from(new Set(data.map(r => r.uf))).sort()], [data]);
+  const especialidades = useMemo(() => ["Todas", ...Array.from(new Set(data.map(r => r.ds_especialidade))).sort()], [data]);
 
-// AJUSTE 4: cards da página SLA & Metas com nova regra (meta 75%, SLA ≤15min)
-function VSLA() {
-  return (
-    <>
-      <Title t="SLA & Metas" s="Acompanhamento dos indicadores de nível de serviço"/>
-      <div className="grid grid-cols-4 gap-3 mb-3">
-        {[
-          {l:"SLA Geral (≤15min)", v:"68,5%",m:"75%", ok:false,c:"#ef4444"},
-          {l:"Hospitais na Meta",  v:"33/47", m:"47",  ok:false,c:"#fb923c"},
-          {l:"Meta do Mês",        v:"68,5%", m:"75%", ok:false,c:"#facc15"},
-          {l:"Melhor UF",          v:"MG",    m:"86%", ok:true, c:"#22c55e"},
-        ].map((k,i)=>(
-          <Card key={i} className="text-center">
-            <p className="text-slate-400 text-[12px] mb-2">{k.l}</p>
-            <p className="text-[36px] font-black" style={{color:k.c}}>{k.v}</p>
-            <p className="text-slate-500 text-[11px] mt-1">Meta: {k.m}</p>
-            <div className={`mt-2 text-[11px] font-bold ${k.ok?"text-green-400":"text-red-400"}`}>{k.ok?"✓ Dentro da meta":"✗ Abaixo da meta"}</div>
-          </Card>
-        ))}
-      </div>
-      <div className="grid grid-cols-12 gap-3 mb-3">
-        <Card className="col-span-7">
-          {/* AJUSTE 4/5: título e linha de referência na meta 75% */}
-          <h2 className="text-[16px] font-black mb-3">SLA por Especialidade vs Meta (75% ≤ 15min)</h2>
-          <div className="h-[260px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={slaData} margin={{left:0,right:8}}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f"/>
-                <XAxis dataKey="esp" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:10,fill:"#64748b"}}/>
-                <YAxis stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}} domain={[0,100]} tickFormatter={v=>`${v}%`}/>
-                <ReferenceLine y={75} stroke="#facc15" strokeDasharray="4 3" label={{value:"Meta 75%",fill:"#facc15",fontSize:10,position:"insideTopRight"}}/>
-                <Tooltip contentStyle={{background:"#081120",border:"1px solid rgba(255,255,255,.06)",borderRadius:"12px",color:"#fff",fontSize:12}}/>
-                <Bar dataKey="meta" fill="#1e3a5f" radius={[4,4,0,0]} name="Meta"/>
-                <Bar dataKey="real" radius={[4,4,0,0]} name="Realizado">{slaData.map((d,i)=><Cell key={i} fill={d.real>=d.meta?"#22c55e":"#ef4444"}/>)}</Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-        <Card className="col-span-5">
-          <h2 className="text-[16px] font-black mb-3">Histórico SLA — 7 Meses</h2>
-          <div className="h-[260px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={slaHist} margin={{left:0,right:8}}>
-                <defs><linearGradient id="gS" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#3b82f6" stopOpacity={0.4}/><stop offset="100%" stopColor="#3b82f6" stopOpacity={0}/></linearGradient></defs>
-                <XAxis dataKey="mes" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}}/>
-                <YAxis stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}} domain={[50,90]} tickFormatter={v=>`${v}%`} width={40}/>
-                <ReferenceLine y={75} stroke="#facc15" strokeDasharray="4 3" label={{value:"Meta 75%",fill:"#facc15",fontSize:10,position:"insideTopRight"}}/>
-                <Tooltip contentStyle={{background:"#081120",border:"1px solid rgba(255,255,255,.06)",borderRadius:"12px",color:"#fff",fontSize:12}}/>
-                <Area type="monotone" dataKey="sla" stroke="#3b82f6" strokeWidth={2.5} fill="url(#gS)" dot={{r:4,fill:"#3b82f6"}}/>
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-      </div>
-      <Card>
-        <h2 className="text-[16px] font-black mb-4">Detalhamento por Especialidade</h2>
-        <div className="space-y-4">
-          {slaData.map((d,i)=>(
-            <div key={i} className="flex items-center gap-4">
-              <span className="text-[13px] w-32 text-slate-300">{d.esp}</span>
-              <div className="flex-1 h-3 rounded-full bg-white/[0.05] overflow-hidden relative">
-                <div className="h-full rounded-full" style={{width:`${d.meta}%`,background:"#1e3a5f"}}/>
-                <div className="h-full rounded-full absolute top-0 left-0" style={{width:`${d.real}%`,background:d.real>=d.meta?"#22c55e":"#ef4444",boxShadow:`0 0 10px ${d.real>=d.meta?"#22c55e":"#ef4444"}80`}}/>
-              </div>
-              <span className="text-[13px] font-bold w-12 text-right" style={{color:d.real>=d.meta?"#22c55e":"#ef4444"}}>{d.real}%</span>
-              <span className="text-[12px] text-slate-500 w-16">meta {d.meta}%</span>
-              <span className={`text-[12px] font-bold w-16 ${d.trend>0?"text-green-400":"text-red-400"}`}>{d.trend>0?`+${d.trend}%`:`${d.trend}%`}</span>
-            </div>
-          ))}
-        </div>
-      </Card>
-    </>
-  );
-}
-
-function VAlertas() {
-  const [al,setAl] = useState(alertasInit);
-  const nl = al.filter(a=>!a.lido).length;
-  return (
-    <>
-      <Title t="Central de Alertas" s={`${nl} alertas não lidos`}/>
-      <div className="grid grid-cols-4 gap-3 mb-4">
-        {[{tipo:"Crítico",qtd:3,c:"#ef4444",i:<XCircle size={20}/>},{tipo:"Grave",qtd:3,c:"#fb923c",i:<AlertTriangle size={20}/>},{tipo:"Atenção",qtd:2,c:"#facc15",i:<Bell size={20}/>},{tipo:"Info",qtd:2,c:"#3b82f6",i:<CheckCircle size={20}/>}].map((k,i)=>(
-          <Card key={i} className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl flex items-center justify-center" style={{background:`${k.c}20`}}><span style={{color:k.c}}>{k.i}</span></div>
-            <div><p className="text-slate-400 text-[12px]">{k.tipo}</p><p className="text-[28px] font-black leading-none">{k.qtd}</p></div>
-          </Card>
-        ))}
-      </div>
-      <Card>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-[16px] font-black">Todos os Alertas</h2>
-          <button onClick={()=>setAl(a=>a.map(x=>({...x,lido:true})))} className="flex items-center gap-2 px-3 py-2 rounded-xl border border-white/[0.06] bg-white/[0.03] text-[12px] text-slate-300"><CheckCircle size={14}/> Marcar todos como lidos</button>
-        </div>
-        <div className="space-y-2">
-          {al.map((a,i)=>(
-            <div key={i} className={`flex items-start gap-4 p-4 rounded-xl border transition-all ${a.lido?"border-white/[0.03] bg-white/[0.01] opacity-60":"border-white/[0.06] bg-white/[0.03]"}`}>
-              <div className="w-3 h-3 rounded-full mt-1 shrink-0" style={{background:SC[a.tipo]}}/>
-              <div className="flex-1">
-                <div className="flex items-center gap-2 mb-1"><Badge status={a.tipo}/><span className="text-slate-500 text-[11px]">{a.hora}</span>{!a.lido&&<span className="text-[10px] font-bold text-blue-400 bg-blue-400/10 px-2 py-0.5 rounded-full">NOVO</span>}</div>
-                <p className="text-[13px] text-slate-200">{a.msg}</p>
-              </div>
-              <button onClick={()=>setAl(arr=>arr.map(x=>x.id===a.id?{...x,lido:true}:x))} className="text-slate-500 hover:text-white text-[11px] shrink-0 mt-1">{!a.lido?"Marcar lido":"✓"}</button>
-            </div>
-          ))}
-        </div>
-      </Card>
-    </>
-  );
-}
-
-// AJUSTE 1: Relatórios substituído por área analítica com gráficos (sem botões PDF)
-function VRelatorios() {
-  const mediaSemanal = Math.round(relSemanal.reduce((s,d)=>s+d.sla,0)/relSemanal.length);
-  return (
-    <>
-      <Title t="Relatórios & Análises" s="Indicadores históricos de SLA · ≤ 15min · Meta: 75%"/>
-      <Card className="mb-3">
-        <h2 className="text-[16px] font-black mb-3">Evolução do SLA — Últimos 14 Dias</h2>
-        <div className="h-[200px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={evolucaoSLA} margin={{left:0,right:8,top:4,bottom:0}}>
-              <defs><linearGradient id="gEv" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#3b82f6" stopOpacity={0.4}/><stop offset="100%" stopColor="#3b82f6" stopOpacity={0}/></linearGradient></defs>
-              <XAxis dataKey="dia" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:10,fill:"#64748b"}}/>
-              <YAxis stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}} domain={[50,90]} tickFormatter={v=>`${v}%`} width={40}/>
-              <ReferenceLine y={75} stroke="#facc15" strokeDasharray="4 3" label={{value:"Meta 75%",fill:"#facc15",fontSize:10,position:"insideTopRight"}}/>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f"/>
-              <Tooltip contentStyle={{background:"#081120",border:"1px solid rgba(255,255,255,.06)",borderRadius:"12px",color:"#fff",fontSize:12}} formatter={(v:any)=>[`${v}%`,"SLA ≤15min"]}/>
-              <Area type="monotone" dataKey="sla" stroke="#3b82f6" strokeWidth={2.5} fill="url(#gEv)" dot={{r:3,fill:"#3b82f6"}} activeDot={{r:5}}/>
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-      </Card>
-      <div className="grid grid-cols-12 gap-3 mb-3">
-        <Card className="col-span-4">
-          <h2 className="text-[16px] font-black mb-1">Relatório D-1</h2>
-          <p className="text-slate-400 text-[12px] mb-4">Referência: {relDiario.data}</p>
-          <div className="space-y-3">
-            <div className="flex justify-between items-center p-3 rounded-xl bg-white/[0.03] border border-white/[0.04]">
-              <span className="text-[13px] text-slate-300">Total de atendimentos</span>
-              <span className="text-[20px] font-black">{relDiario.totalAtendimentos.toLocaleString("pt-BR")}</span>
-            </div>
-            <div className="flex justify-between items-center p-3 rounded-xl bg-green-500/5 border border-green-500/20">
-              <span className="text-[13px] text-slate-300">Dentro da meta (≤15min)</span>
-              <span className="text-[20px] font-black text-green-400">{relDiario.dentroDaMeta.toLocaleString("pt-BR")}</span>
-            </div>
-            <div className="flex justify-between items-center p-3 rounded-xl bg-red-500/5 border border-red-500/20">
-              <span className="text-[13px] text-slate-300">Fora da meta (&gt;15min)</span>
-              <span className="text-[20px] font-black text-red-400">{relDiario.foraDaMeta.toLocaleString("pt-BR")}</span>
-            </div>
-            <div className="flex justify-between items-center p-3 rounded-xl bg-white/[0.03] border border-white/[0.04]">
-              <span className="text-[13px] text-slate-300">Indicador do dia</span>
-              <span className="text-[28px] font-black" style={{color:relDiario.indicador>=75?"#22c55e":"#ef4444"}}>{relDiario.indicador}%</span>
-            </div>
-            <div className={`text-center text-[13px] font-bold py-2 rounded-xl ${relDiario.indicador>=75?"text-green-400 bg-green-400/10":"text-red-400 bg-red-400/10"}`}>
-              {relDiario.indicador>=75?"✓ Meta atingida no dia":"✗ Meta não atingida no dia"}
-            </div>
-          </div>
-        </Card>
-        <Card className="col-span-8">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-[16px] font-black">Relatório Semanal — Por Dia da Semana</h2>
-            <div className="flex items-center gap-3">
-              <span className="text-[12px] text-slate-400">Média semanal:</span>
-              <span className="text-[16px] font-black" style={{color:mediaSemanal>=75?"#22c55e":"#ef4444"}}>{mediaSemanal}%</span>
-            </div>
-          </div>
-          <div className="h-[200px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={relSemanal} margin={{left:0,right:8}}>
-                <XAxis dataKey="dia" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}}/>
-                <YAxis stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}} domain={[50,90]} tickFormatter={v=>`${v}%`} width={40}/>
-                <ReferenceLine y={75} stroke="#facc15" strokeDasharray="4 3" label={{value:"Meta 75%",fill:"#facc15",fontSize:10,position:"insideTopRight"}}/>
-                <Tooltip contentStyle={{background:"#081120",border:"1px solid rgba(255,255,255,.06)",borderRadius:"12px",color:"#fff",fontSize:12}} formatter={(v:any)=>[`${v}%`,"SLA ≤15min"]}/>
-                <Bar dataKey="sla" radius={[6,6,0,0]} name="SLA ≤15min">
-                  {relSemanal.map((d,i)=><Cell key={i} fill={d.sla>=75?"#22c55e":"#ef4444"}/>)}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-      </div>
-      <div className="grid grid-cols-12 gap-3 mb-3">
-        <Card className="col-span-8">
-          <h2 className="text-[16px] font-black mb-3">Relatório Mensal — Evolução por Semana (Mai/2025)</h2>
-          <div className="h-[200px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={relMensal} margin={{left:0,right:8}}>
-                <defs><linearGradient id="gMes" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#8b5cf6" stopOpacity={0.4}/><stop offset="100%" stopColor="#8b5cf6" stopOpacity={0}/></linearGradient></defs>
-                <XAxis dataKey="sem" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}}/>
-                <YAxis stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}} domain={[55,85]} tickFormatter={v=>`${v}%`} width={40}/>
-                <ReferenceLine y={75} stroke="#facc15" strokeDasharray="4 3" label={{value:"Meta 75%",fill:"#facc15",fontSize:10,position:"insideTopRight"}}/>
-                <Tooltip contentStyle={{background:"#081120",border:"1px solid rgba(255,255,255,.06)",borderRadius:"12px",color:"#fff",fontSize:12}} formatter={(v:any)=>[`${v}%`,"SLA ≤15min"]}/>
-                <Area type="monotone" dataKey="sla" stroke="#8b5cf6" strokeWidth={2.5} fill="url(#gMes)" dot={{r:4,fill:"#8b5cf6"}}/>
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-        <Card className="col-span-4">
-          <h2 className="text-[16px] font-black mb-3">Comparativo Mensal</h2>
-          <div className="h-[200px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={comparMeses} margin={{left:0,right:8}}>
-                <XAxis dataKey="mes" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}}/>
-                <YAxis stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#64748b"}} domain={[55,85]} tickFormatter={v=>`${v}%`} width={40}/>
-                <ReferenceLine y={75} stroke="#facc15" strokeDasharray="4 3"/>
-                <Tooltip contentStyle={{background:"#081120",border:"1px solid rgba(255,255,255,.06)",borderRadius:"12px",color:"#fff",fontSize:12}} formatter={(v:any)=>[`${v}%`,"SLA ≤15min"]}/>
-                <Bar dataKey="sla" radius={[6,6,0,0]} name="SLA ≤15min">
-                  {comparMeses.map((d,i)=><Cell key={i} fill={d.sla>=75?"#22c55e":"#ef4444"}/>)}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-      </div>
-      <div className="grid grid-cols-12 gap-3">
-        <Card className="col-span-6">
-          <h2 className="text-[16px] font-black mb-3">Performance por UF — Melhor → Pior</h2>
-          <div className="h-[280px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={ufPerfSLA} layout="vertical" margin={{left:8,right:32}}>
-                <XAxis type="number" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:10,fill:"#64748b"}} domain={[0,100]} tickFormatter={v=>`${v}%`}/>
-                <YAxis dataKey="uf" type="category" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#94a3b8"}} width={28}/>
-                <ReferenceLine x={75} stroke="#facc15" strokeDasharray="4 3" label={{value:"75%",fill:"#facc15",fontSize:10,position:"insideTopRight"}}/>
-                <Tooltip contentStyle={{background:"#081120",border:"1px solid rgba(255,255,255,.06)",borderRadius:"12px",color:"#fff",fontSize:12}} formatter={(v:any)=>[`${v}%`,"SLA ≤15min"]}/>
-                <Bar dataKey="sla" radius={[0,4,4,0]} name="SLA ≤15min">
-                  {ufPerfSLA.map((u,i)=><Cell key={i} fill={u.sla>=75?"#22c55e":"#ef4444"}/>)}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-        <Card className="col-span-6">
-          <h2 className="text-[16px] font-black mb-3">Performance por Especialidade — Melhor → Pior</h2>
-          <div className="h-[280px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={espPerfSLA} layout="vertical" margin={{left:56,right:32}}>
-                <XAxis type="number" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:10,fill:"#64748b"}} domain={[0,100]} tickFormatter={v=>`${v}%`}/>
-                <YAxis dataKey="esp" type="category" stroke="#334155" axisLine={false} tickLine={false} tick={{fontSize:10,fill:"#94a3b8"}} width={80}/>
-                <ReferenceLine x={75} stroke="#facc15" strokeDasharray="4 3" label={{value:"75%",fill:"#facc15",fontSize:10,position:"insideTopRight"}}/>
-                <Tooltip contentStyle={{background:"#081120",border:"1px solid rgba(255,255,255,.06)",borderRadius:"12px",color:"#fff",fontSize:12}} formatter={(v:any)=>[`${v}%`,"SLA ≤15min"]}/>
-                <Bar dataKey="sla" radius={[0,4,4,0]} name="SLA ≤15min">
-                  {espPerfSLA.map((d,i)=><Cell key={i} fill={d.sla>=75?"#22c55e":"#ef4444"}/>)}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-      </div>
-    </>
-  );
-}
-
-function VConfig() {
-  const [iv,setIv] = useState("30");
-  const [au,setAu] = useState(true);
-  return (
-    <>
-      <Title t="Configurações" s="Preferências do sistema operacional"/>
-      <div className="grid grid-cols-2 gap-4">
-        <Card>
-          <h2 className="text-[16px] font-black mb-4">Atualização de Dados</h2>
-          <div className="space-y-4">
-            <div>
-              <label className="text-[13px] text-slate-400 block mb-2">Intervalo de atualização</label>
-              <select value={iv} onChange={e=>setIv(e.target.value)} className="w-full bg-white/[0.05] border border-white/[0.08] rounded-xl px-4 py-2.5 text-[13px] text-white outline-none">
-                <option value="10">A cada 10 segundos</option>
-                <option value="30">A cada 30 segundos</option>
-                <option value="60">A cada 1 minuto</option>
-                <option value="300">A cada 5 minutos</option>
-              </select>
-            </div>
-            <div className="flex items-center justify-between p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
-              <div><p className="text-[13px] font-medium">Atualização automática</p><p className="text-[11px] text-slate-400">Recarrega dados automaticamente</p></div>
-              <button onClick={()=>setAu(n=>!n)} className={`w-12 h-6 rounded-full transition-all relative ${au?"bg-blue-600":"bg-white/[0.1]"}`}><div className={`w-4 h-4 rounded-full bg-white absolute top-1 transition-all ${au?"left-7":"left-1"}`}/></button>
-            </div>
-          </div>
-        </Card>
-        <Card>
-          <h2 className="text-[16px] font-black mb-4">Fonte de Dados</h2>
-          <div className="space-y-3">
-            <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
-              <p className="text-[12px] text-slate-400 mb-1">Banco de Dados</p>
-              <p className="text-[12px] font-mono text-blue-400">Firebase Firestore</p>
-            </div>
-            <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
-              <p className="text-[12px] text-slate-400 mb-1">Status</p>
-              <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-green-400 animate-pulse"/><p className="text-[12px] text-green-400">Conectado</p></div>
-            </div>
-            <a href="/upload" className="w-full py-2.5 rounded-xl bg-[#2563EB] text-[13px] font-bold flex items-center justify-center gap-2 hover:bg-blue-500 transition-all"><RefreshCw size={14}/> Atualizar Dados</a>
-          </div>
-        </Card>
-        <Card>
-          <h2 className="text-[16px] font-black mb-4">Sobre o Sistema</h2>
-          <div className="space-y-3 text-[13px]">
-            {[["Versão","1.0.0"],["Ambiente","Vercel"],["Framework","Next.js + TypeScript"],["Banco","Firebase Firestore"],["UI","TailwindCSS + Recharts"]].map(([k,v])=>(
-              <div key={k} className="flex justify-between py-2 border-b border-white/[0.04]"><span className="text-slate-400">{k}</span><span className="font-medium">{v}</span></div>
-            ))}
-          </div>
-        </Card>
-      </div>
-    </>
-  );
-}
-
-// ─── ROOT ─────────────────────────────────────────────────────────────────────
-export default function Page() {
-  const [clock,setClock]  = useState("");
-  const [nav,setNav]      = useState("Visão Geral");
-  const [ac,sac]          = useState<"Linha"|"Área"|"Barras">("Linha");
-  const [dashData, setDashData] = useState<DashData | null>(null);
-  const [ultimaAtu, setUltimaAtu] = useState("carregando...");
-
-  useEffect(()=>{
-    const fmt=()=>setClock(new Date().toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit",second:"2-digit"}));
-    fmt(); const id=setInterval(fmt,1000); return()=>clearInterval(id);
-  },[]);
-
-  useEffect(()=>{
-    const load = async () => {
-      try {
-        const res = await fetch("/api/dados");
-        const data = await res.json();
-        if (data.resumo) {
-          setDashData(data);
-          const info = [data.turno, data.data].filter(Boolean).join(" — ");
-          setUltimaAtu(info || data.atualizadoEm || "agora");
-        }
-      } catch(e) {
-        console.error("Erro ao buscar dados:", e);
+  const filtered = useMemo(() => {
+    return data.filter(r => {
+      const q = searchQ.toLowerCase();
+      if (q && !r.nm_local.toLowerCase().includes(q) && !r.uf.toLowerCase().includes(q) && !r.ds_especialidade.toLowerCase().includes(q) && !r.nm_medico.toLowerCase().includes(q)) return false;
+      if (filterUF !== "Todos" && r.uf !== filterUF) return false;
+      if (filterEsp !== "Todas" && r.ds_especialidade !== filterEsp) return false;
+      if (filterStatus !== "Todos") {
+        const lbl = statusLabel(r.tempo_espera_min);
+        if (lbl !== filterStatus) return false;
       }
-    };
-    load();
-    const id = setInterval(load, 30000);
-    return () => clearInterval(id);
-  },[]);
+      return true;
+    }).sort((a, b) => {
+      const val = sortDir === "desc" ? -1 : 1;
+      if (sortBy === "nm_local") return val * a.nm_local.localeCompare(b.nm_local);
+      return val * (a[sortBy] - b[sortBy]);
+    });
+  }, [data, searchQ, filterUF, filterEsp, filterStatus, sortBy, sortDir]);
+
+  const paginated = useMemo(() => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [filtered, page]);
+  const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
+
+  // KPIs
+  const kpis = useMemo(() => {
+    const aguardando = data.reduce((s, r) => s + (r.qt_pacientes_aguardando || 0), 0);
+    const tempoMedio = data.length ? Math.round(data.reduce((s, r) => s + r.tempo_espera_min, 0) / data.length) : 0;
+    const maiorEspera = data.length ? Math.max(...data.map(r => r.tempo_espera_min)) : 0;
+    const criticos = data.filter(r => r.tempo_espera_min > 60).length;
+    const hospitaisCriticos = new Set(data.filter(r => r.tempo_espera_min > 60).map(r => r.nm_local)).size;
+    return { aguardando, tempoMedio, maiorEspera, criticos, hospitaisCriticos, total: data.length };
+  }, [data]);
+
+  // Status distribution
+  const distStatus = useMemo(() => {
+    const c = { Crítico: 0, Grave: 0, Atenção: 0, Normal: 0 };
+    data.forEach(r => { const l = statusLabel(r.tempo_espera_min) as keyof typeof c; c[l]++; });
+    return [
+      { name: "Crítico", value: c.Crítico, color: "#ef4444" },
+      { name: "Grave", value: c.Grave, color: "#f97316" },
+      { name: "Atenção", value: c.Atenção, color: "#facc15" },
+      { name: "Normal", value: c.Normal, color: "#22c55e" },
+    ];
+  }, [data]);
+
+  // Por hora
+  const porHora = useMemo(() => {
+    const map: Record<number, { count: number; total: number }> = {};
+    data.forEach(r => {
+      const h = Math.floor(r.hr_registro_espera_min / 60);
+      if (!map[h]) map[h] = { count: 0, total: 0 };
+      map[h].count++;
+      map[h].total += r.tempo_espera_min;
+    });
+    return Object.entries(map)
+      .sort(([a], [b]) => Number(a) - Number(b))
+      .map(([h, v]) => ({ hora: `${h}h`, media: Math.round(v.total / v.count), registros: v.count }));
+  }, [data]);
+
+  // Por especialidade top 10
+  const porEsp = useMemo(() => {
+    const map: Record<string, { count: number; total: number; critico: number }> = {};
+    data.forEach(r => {
+      if (!map[r.ds_especialidade]) map[r.ds_especialidade] = { count: 0, total: 0, critico: 0 };
+      map[r.ds_especialidade].count++;
+      map[r.ds_especialidade].total += r.tempo_espera_min;
+      if (r.tempo_espera_min > 60) map[r.ds_especialidade].critico++;
+    });
+    return Object.entries(map)
+      .map(([esp, v]) => ({ esp, count: v.count, media: Math.round(v.total / v.count), critico: v.critico }))
+      .sort((a, b) => b.media - a.media);
+  }, [data]);
+
+  // Por UF
+  const porUF = useMemo(() => {
+    const map: Record<string, { count: number; total: number; critico: number; grave: number; atencao: number; normal: number; hospitais: Set<string> }> = {};
+    data.forEach(r => {
+      if (!map[r.uf]) map[r.uf] = { count: 0, total: 0, critico: 0, grave: 0, atencao: 0, normal: 0, hospitais: new Set() };
+      const m = map[r.uf];
+      m.count++;
+      m.total += r.tempo_espera_min;
+      m.hospitais.add(r.nm_local);
+      const lbl = statusLabel(r.tempo_espera_min);
+      if (lbl === "Crítico") m.critico++;
+      else if (lbl === "Grave") m.grave++;
+      else if (lbl === "Atenção") m.atencao++;
+      else m.normal++;
+    });
+    return Object.entries(map).map(([uf, v]) => ({
+      uf, count: v.count, media: Math.round(v.total / v.count),
+      critico: v.critico, grave: v.grave, atencao: v.atencao, normal: v.normal,
+      hospitais: v.hospitais.size,
+      statusPrincipal: v.critico > 0 ? "Crítico" : v.grave > 0 ? "Grave" : v.atencao > 0 ? "Atenção" : "Normal",
+    })).sort((a, b) => b.critico - a.critico);
+  }, [data]);
+
+  // Ranking
+  const rankingData = useMemo(() => {
+    if (rankingType === "local") {
+      const map: Record<string, { total: number; count: number; critico: number }> = {};
+      data.forEach(r => {
+        if (!map[r.nm_local]) map[r.nm_local] = { total: 0, count: 0, critico: 0 };
+        map[r.nm_local].total += r.tempo_espera_min;
+        map[r.nm_local].count++;
+        if (r.tempo_espera_min > 60) map[r.nm_local].critico++;
+      });
+      return Object.entries(map)
+        .map(([name, v]) => ({ name, media: Math.round(v.total / v.count), critico: v.critico, count: v.count }))
+        .sort((a, b) => b.media - a.media).slice(0, 20);
+    } else if (rankingType === "uf") {
+      return porUF.map(u => ({ name: u.uf, media: u.media, critico: u.critico, count: u.count }));
+    } else {
+      return porEsp.slice(0, 20).map(e => ({ name: e.esp, media: e.media, critico: e.critico, count: e.count }));
+    }
+  }, [rankingType, data, porUF, porEsp]);
+
+  // Alertas
+  const alertas = useMemo(() => {
+    if (alertasType === "critico") return data.filter(r => r.tempo_espera_min > 60).slice(0, 50);
+    if (alertasType === "atraso") return data.filter(r => r.atraso === "SIM").slice(0, 50);
+    return data.filter(r => r.atraso === "FALTA").slice(0, 50);
+  }, [data, alertasType]);
+
+  // SLA
+  const sla = useMemo(() => {
+    const total = data.length;
+    if (!total) return { dentroSLA: 0, foraSLA: 0, pct: 0, porUF: [] };
+    const dentroSLA = data.filter(r => r.tempo_espera_min <= slaThreshold).length;
+    const foraSLA = total - dentroSLA;
+    const pct = Math.round((dentroSLA / total) * 100);
+    const ufSLA = porUF.map(u => {
+      const ufData = data.filter(r => r.uf === u.uf);
+      const ok = ufData.filter(r => r.tempo_espera_min <= slaThreshold).length;
+      return { uf: u.uf, pct: Math.round((ok / ufData.length) * 100), total: ufData.length, ok, hospitais: u.hospitais };
+    }).sort((a, b) => a.pct - b.pct);
+    return { dentroSLA, foraSLA, pct, porUF: ufSLA };
+  }, [data, slaThreshold, porUF]);
+
+  // Vivo filtered
+  const vivoFiltered = useMemo(() => {
+    return data.filter(r => {
+      const q = vivoSearchQ.toLowerCase();
+      if (q && !r.nm_local.toLowerCase().includes(q) && !r.uf.toLowerCase().includes(q) && !r.nm_medico.toLowerCase().includes(q)) return false;
+      if (vivoFilterUF !== "Todos" && r.uf !== vivoFilterUF) return false;
+      if (vivoFilterStatus !== "Todos" && statusLabel(r.tempo_espera_min) !== vivoFilterStatus) return false;
+      return true;
+    }).slice(0, 200);
+  }, [data, vivoSearchQ, vivoFilterUF, vivoFilterStatus]);
+
+  // Especialidades filtered
+  const espFiltered = useMemo(() => {
+    return porEsp.filter(e => e.esp.toLowerCase().includes(espSearch.toLowerCase()));
+  }, [porEsp, espSearch]);
+
+  function exportCSV() {
+    const headers = ["UF","Unidade","Médico","Especialidade","Cidade","Aguardando","Tempo Espera (min)","Tempo Atraso (min)","Status","Atraso"];
+    const rows = filtered.map(r => [r.uf, r.nm_local, r.nm_medico, r.ds_especialidade, r.cidade, r.qt_pacientes_aguardando, r.tempo_espera_min, r.tempo_atraso_min ?? "", r.status, r.atraso]);
+    const csv = [headers, ...rows].map(r => r.map(v => `"${v}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `hapvida-espera-${new Date().toISOString().slice(0,10)}.csv`;
+    a.click(); URL.revokeObjectURL(url);
+  }
+
+  function SortTh({ col, label }: { col: "tempo_espera_min" | "qt_pacientes_aguardando" | "nm_local"; label: string }) {
+    return (
+      <th className="text-left pb-3 pr-4 text-xs text-slate-400 font-medium whitespace-nowrap cursor-pointer select-none hover:text-white"
+        onClick={() => { if (sortBy === col) setSortDir(d => d === "desc" ? "asc" : "desc"); else { setSortBy(col); setSortDir("desc"); } }}>
+        <span className="flex items-center gap-1">{label}
+          {sortBy === col ? (sortDir === "desc" ? <ChevronDown size={12} /> : <ChevronUp size={12} />) : <Minus size={12} className="opacity-30" />}
+        </span>
+      </th>
+    );
+  }
+
+  const card = "rounded-2xl border border-white/5 bg-[#06111F]/95 p-4";
+  const card2 = "rounded-2xl border border-white/5 bg-[#071220]/95 p-4";
+  const inputCls = "bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-slate-300 outline-none focus:border-blue-500/50 placeholder-slate-500";
+  const selectCls = "bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-slate-300 outline-none cursor-pointer";
 
   return (
-    <main className="min-h-screen bg-[#020611] text-white flex overflow-hidden">
-      <div className="fixed inset-0 pointer-events-none">
-        <div className="absolute top-[-300px] left-[15%] w-[900px] h-[900px] rounded-full bg-blue-600/8 blur-[200px]"/>
-        <div className="absolute bottom-[-200px] right-[-100px] w-[700px] h-[700px] rounded-full bg-cyan-500/8 blur-[180px]"/>
-      </div>
-
-      {/* SIDEBAR — sem alterações */}
-      <aside className="w-[210px] shrink-0 bg-[#030B18]/95 border-r border-white/[0.05] px-4 py-5 flex flex-col relative z-10">
-        <div className="flex items-center gap-2 mb-8">
-          <div className="w-10 h-10 rounded-xl bg-[#ff6b00] flex items-center justify-center text-lg font-black">✳</div>
-          <div><h1 className="text-[18px] font-black leading-tight">Hapvida</h1><p className="text-[11px] text-slate-400">Central Operacional</p></div>
+    <div className="flex min-h-screen" style={{ background: "#020611", color: "#fff" }}>
+      {/* Sidebar */}
+      <aside style={{ width: sidebarOpen ? 210 : 60, background: "#030B18", borderRight: "1px solid rgba(255,255,255,0.05)", transition: "width 0.2s", flexShrink: 0 }}
+        className="flex flex-col px-3 py-5 relative z-10">
+        <div className="flex items-center gap-2 mb-8" style={{ overflow: "hidden" }}>
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg font-black shrink-0" style={{ background: "#ff6b00" }}>✳</div>
+          {sidebarOpen && <div><p className="text-lg font-black leading-tight">Hapvida</p><p className="text-xs text-slate-400">Central Operacional</p></div>}
         </div>
-        <nav className="space-y-1">
-          {NAV.map(([label,Icon,badge])=>(
-            <button key={label as string} onClick={()=>setNav(label as string)}
-              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all ${nav===label?"bg-gradient-to-r from-[#2563EB] to-[#4F46E5] shadow-[0_4px_20px_rgba(37,99,235,.35)]":"hover:bg-white/[0.04] text-slate-300"}`}>
-              <div className="flex items-center gap-2.5"><Icon size={16}/><span className="text-[14px]">{label as string}</span></div>
-              {badge&&<div className="w-5 h-5 rounded-full bg-red-500 flex items-center justify-center text-[10px] font-bold">{badge}</div>}
-            </button>
-          ))}
+        <nav className="space-y-1 flex-1">
+          {NAV.map(({ id, label, icon: Icon }) => {
+            const active = activeSection === id;
+            const alertCount = id === "alertas" ? kpis.criticos : 0;
+            return (
+              <button key={id} onClick={() => setActiveSection(id)}
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-all text-sm"
+                style={{ background: active ? "linear-gradient(to right,#2563EB,#4F46E5)" : "transparent", color: active ? "#fff" : "#94a3b8", boxShadow: active ? "0 4px 20px rgba(37,99,235,.35)" : "none" }}>
+                <Icon size={16} className="shrink-0" />
+                {sidebarOpen && <span className="truncate">{label}</span>}
+                {sidebarOpen && alertCount > 0 && (
+                  <span className="ml-auto w-5 h-5 rounded-full bg-red-500 flex items-center justify-center text-xs font-bold shrink-0">
+                    {alertCount > 99 ? "99+" : alertCount}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </nav>
-        <div className="mt-auto rounded-[20px] border border-white/[0.06] bg-gradient-to-br from-[#0F172A] to-[#07101D] p-4 relative overflow-hidden">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(37,99,235,.2),transparent_50%)]"/>
-          <div className="relative z-10">
-            <div className="flex items-center gap-2 mb-3"><HeartPulse size={18} className="text-[#60A5FA]"/><div><p className="text-[15px] font-black">Hapvida</p><p className="text-[11px] text-slate-400">Data Lakehouse</p></div></div>
-            <p className="text-slate-400 text-[11px] leading-relaxed">Inteligência operacional em tempo real.</p>
-            <div className="mt-4 h-9 rounded-xl bg-gradient-to-r from-[#123B8B] to-[#0B2B5C] border border-blue-400/20 flex items-center justify-center text-[#60A5FA] text-[12px] font-semibold tracking-widest">● LIVE DATA</div>
+        {sidebarOpen && (
+          <div className="mt-4 rounded-xl border border-white/10 p-3" style={{ background: "linear-gradient(135deg,#0F172A,#07101D)" }}>
+            <div className="flex items-center gap-2 mb-2">
+              <HeartPulse size={16} className="text-blue-400" />
+              <p className="text-sm font-black">Hapvida</p>
+            </div>
+            <p className="text-slate-400 text-xs">Inteligência operacional em tempo real.</p>
+            <div className="mt-3 rounded-xl border border-blue-400/20 flex items-center justify-center text-blue-400 text-xs font-semibold py-1.5" style={{ background: "linear-gradient(to right,#123B8B,#0B2B5C)" }}>
+              ● LIVE DATA
+            </div>
           </div>
-        </div>
+        )}
       </aside>
 
-      {/* CONTENT */}
-      <section className="flex-1 px-4 py-4 overflow-auto relative z-10">
-        <header className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-4">
-            <button className="w-10 h-10 rounded-xl border border-white/[0.06] bg-white/[0.03] flex items-center justify-center"><Menu size={18}/></button>
-            <div className="flex items-center gap-3">
-              {/* AJUSTE 2: apenas a palavra "Médica" → "Emergência" */}
-              <h1 className="text-[20px] font-black tracking-tight">Central Operacional — Tempo de Espera Emergência</h1>
-              <div className="w-2.5 h-2.5 rounded-full bg-green-400 shadow-[0_0_12px_rgba(74,222,128,.9)]"/>
-              <span className="text-slate-400 text-[12px]">Atualizado: {ultimaAtu}</span>
+      {/* Main */}
+      <main className="flex-1 overflow-auto">
+        {/* Header */}
+        <header className="flex items-center justify-between px-4 py-3 border-b border-white/5 sticky top-0 z-10" style={{ background: "#020611cc", backdropFilter: "blur(12px)" }}>
+          <div className="flex items-center gap-3">
+            <button onClick={() => setSidebarOpen(o => !o)} className="w-9 h-9 rounded-xl border border-white/10 flex items-center justify-center hover:bg-white/5">
+              <Menu size={16} />
+            </button>
+            <div>
+              <h1 className="text-lg font-black tracking-tight">Central Operacional — Tempo de Espera Médica</h1>
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" style={{ boxShadow: "0 0 8px rgba(74,222,128,.9)" }} />
+                <span className="text-xs text-slate-400">Atualizado: {loading ? "carregando..." : lastUpdate}</span>
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button className="w-10 h-10 rounded-xl border border-white/[0.06] bg-white/[0.03] flex items-center justify-center relative"><Bell size={16}/><div className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 text-[9px] flex items-center justify-center font-bold">8</div></button>
-            <button className="w-10 h-10 rounded-xl border border-white/[0.06] bg-white/[0.03] flex items-center justify-center"><Moon size={16}/></button>
-            <div className="px-4 py-2 rounded-xl border border-white/[0.06] bg-white/[0.03] text-[13px] font-mono">{clock}</div>
+            <button onClick={() => setAutoRefresh(a => !a)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-white/10 text-sm hover:bg-white/5"
+              style={{ color: autoRefresh ? "#22c55e" : "#94a3b8" }}>
+              <RefreshCw size={14} className={autoRefresh ? "animate-spin" : ""} />
+              <span className="hidden sm:block">{autoRefresh ? "Auto ON" : "Auto OFF"}</span>
+            </button>
+            <button onClick={loadData} className="w-9 h-9 rounded-xl border border-white/10 flex items-center justify-center hover:bg-white/5">
+              <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+            </button>
+            <div className="px-3 py-2 rounded-xl border border-white/10 text-xs font-mono text-slate-400">
+              {data.length.toLocaleString("pt-BR")} registros
+            </div>
           </div>
         </header>
 
-        {nav==="Visão Geral"      && <VGeral ac={ac} sac={sac} dash={dashData}/>}
-        {nav==="Operação ao Vivo" && <VOperacao dash={dashData}/>}
-        {nav==="Ranking"          && <VRanking/>}
-        {nav==="Especialidades"   && <VEspec/>}
-        {nav==="Estados (UF)"     && <VEstados/>}
-        {nav==="SLA & Metas"      && <VSLA/>}
-        {nav==="Alertas"          && <VAlertas/>}
-        {nav==="Relatórios"       && <VRelatorios/>}
-        {nav==="Configurações"    && <VConfig/>}
-      </section>
-    </main>
+        <div className="p-4">
+          {loading && !data.length && (
+            <div className="flex flex-col items-center justify-center h-64 gap-3">
+              <RefreshCw size={32} className="animate-spin text-blue-400" />
+              <p className="text-slate-400">Carregando dados do Supabase...</p>
+            </div>
+          )}
+
+          {/* ── VISÃO GERAL ── */}
+          {activeSection === "visao" && (
+            <div className="space-y-3">
+              {/* KPIs */}
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                {[
+                  { label: "Pacientes Aguardando", value: kpis.aguardando.toLocaleString("pt-BR"), color: "#8B5CF6", icon: Hospital },
+                  { label: "Em Atendimento", value: data.filter(r=>r.status==="Em Atendimento").length, color: "#3B82F6", icon: Activity },
+                  { label: "Tempo Médio", value: minToHM(kpis.tempoMedio), color: "#F59E0B", icon: Clock3 },
+                  { label: "Maior Espera", value: minToHM(kpis.maiorEspera), color: "#EF4444", icon: ShieldAlert },
+                  { label: "Hospitais Críticos", value: kpis.hospitaisCriticos, color: "#EF4444", icon: Bell },
+                  { label: "Total Registros", value: kpis.total.toLocaleString("pt-BR"), color: "#22C55E", icon: CheckCircle2 },
+                ].map(({ label, value, color, icon: Icon }) => (
+                  <div key={label} className={card} style={{ boxShadow: `0 16px 40px ${color}12` }}>
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center mb-3" style={{ background: `${color}20` }}>
+                      <Icon size={18} style={{ color }} />
+                    </div>
+                    <p className="text-xs text-slate-400 mb-1">{label}</p>
+                    <p className="text-2xl font-black">{value}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-12 gap-3">
+                {/* Mapa */}
+                <div className={`${card2} col-span-12 lg:col-span-4`}>
+                  <h2 className="text-base font-black mb-3">Mapa de Criticidade</h2>
+                  <div className="rounded-xl border border-white/10 overflow-hidden" style={{ background: "#030D1A", height: 320 }}>
+                    <svg viewBox="0 0 580 580" className="w-full h-full">
+                      {Object.entries(BRAZIL_PATHS).map(([uf, { path, label, cx, cy }]) => {
+                        const ufData = porUF.find(u => u.uf === uf);
+                        const fill = ufData ? statusColor(ufData.media) : "#1e293b";
+                        return (
+                          <g key={uf} style={{ cursor: "pointer" }} onClick={() => { setSelectedUF(uf); setActiveSection("estados"); }}>
+                            <path d={path} fill={fill} stroke="#0a1a2e" strokeWidth={1.5} opacity={0.9} />
+                            <text x={cx} y={cy - 5} fill="white" fontSize={9} fontWeight="bold" textAnchor="middle">{uf}</text>
+                            {ufData && <text x={cx} y={cy + 8} fill="rgba(255,255,255,0.7)" fontSize={7} textAnchor="middle">{ufData.media}min</text>}
+                          </g>
+                        );
+                      })}
+                    </svg>
+                  </div>
+                  <div className="flex gap-3 mt-2 flex-wrap">
+                    {[["#ef4444","Crítico (>1h)"],["#f97316","Grave (30-60m)"],["#facc15","Atenção (15-30m)"],["#22c55e","Normal (<15m)"]].map(([c,l]) => (
+                      <div key={l} className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-sm" style={{ background: c }} /><span className="text-xs text-slate-300">{l}</span></div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Top 10 */}
+                <div className={`${card2} col-span-12 lg:col-span-4`}>
+                  <h2 className="text-base font-black mb-3">Top 10 Maiores Esperas</h2>
+                  <div className="space-y-2">
+                    {data.slice(0, 10).map((r, i) => (
+                      <div key={r.id} className="flex items-center gap-2">
+                        <span className="text-xs font-bold w-5 text-slate-500">{i+1}</span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium truncate">{r.nm_local}</p>
+                          <p className="text-xs text-slate-500 truncate">{r.uf} · {r.ds_especialidade}</p>
+                        </div>
+                        <div className="flex flex-col items-end shrink-0">
+                          <span className="text-sm font-black" style={{ color: statusColor(r.tempo_espera_min) }}>{minToHM(r.tempo_espera_min)}</span>
+                          <span className="text-xs text-slate-500">{r.qt_pacientes_aguardando} pac.</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Distribuição */}
+                <div className={`${card2} col-span-12 lg:col-span-4`}>
+                  <h2 className="text-base font-black mb-3">Distribuição por Status</h2>
+                  <ResponsiveContainer width="100%" height={200}>
+                    <PieChart>
+                      <Pie data={distStatus} dataKey="value" cx="50%" cy="50%" innerRadius={55} outerRadius={80} paddingAngle={2}>
+                        {distStatus.map((entry) => <Cell key={entry.name} fill={entry.color} />)}
+                      </Pie>
+                      <Tooltip formatter={(v) => [Number(v).toLocaleString("pt-BR"), ""]} contentStyle={{ background: "#0F172A", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8 }} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div className="space-y-2">
+                    {distStatus.map(d => (
+                      <div key={d.name} className="flex items-center justify-between">
+                        <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full" style={{ background: d.color }} /><span className="text-xs text-slate-300">{d.name}</span></div>
+                        <div><span className="font-bold text-sm mr-1">{d.value.toLocaleString("pt-BR")}</span><span className="text-slate-500 text-xs">({data.length ? Math.round(d.value/data.length*100) : 0}%)</span></div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Gráfico evolução + especialidade */}
+              <div className="grid grid-cols-12 gap-3">
+                <div className={`${card2} col-span-12 lg:col-span-8`}>
+                  <h2 className="text-base font-black mb-3">Tempo Médio de Espera por Hora</h2>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <AreaChart data={porHora}>
+                      <defs>
+                        <linearGradient id="grad1" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#2563EB" stopOpacity={0.4} />
+                          <stop offset="95%" stopColor="#2563EB" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                      <XAxis dataKey="hora" tick={{ fill: "#64748b", fontSize: 11 }} />
+                      <YAxis tick={{ fill: "#64748b", fontSize: 11 }} />
+                      <Tooltip contentStyle={{ background: "#0F172A", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8 }} formatter={(v) => [`${Number(v)} min`, "Média"]} />
+                      <Area type="monotone" dataKey="media" stroke="#2563EB" fill="url(#grad1)" strokeWidth={2} dot={false} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className={`${card2} col-span-12 lg:col-span-4`}>
+                  <h2 className="text-base font-black mb-3">Top Especialidades</h2>
+                  <div className="space-y-2 overflow-auto" style={{ maxHeight: 220 }}>
+                    {porEsp.slice(0, 10).map(e => (
+                      <div key={e.esp} className="flex items-center gap-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs truncate">{e.esp}</p>
+                          <div className="h-1 rounded-full mt-1 overflow-hidden bg-white/5">
+                            <div className="h-full rounded-full" style={{ width: `${Math.min(100, (e.media/Math.max(...porEsp.map(x=>x.media)))*100)}%`, background: statusColor(e.media) }} />
+                          </div>
+                        </div>
+                        <span className="text-xs font-bold shrink-0" style={{ color: statusColor(e.media) }}>{e.media}min</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Tabela */}
+              <div className={card2}>
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-base font-black">Hospitais em Tempo Real</h2>
+                  <button onClick={exportCSV} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-white/10 text-xs hover:bg-white/5">
+                    <Download size={12} />Exportar CSV
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-2 mb-3">
+                  <div className="relative">
+                    <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input value={searchQ} onChange={e => { setSearchQ(e.target.value); setPage(1); }} placeholder="Buscar hospital, médico..." className={inputCls + " pl-8 w-64"} />
+                  </div>
+                  <select value={filterUF} onChange={e => { setFilterUF(e.target.value); setPage(1); }} className={selectCls}>
+                    {ufs.map(u => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                  <select value={filterEsp} onChange={e => { setFilterEsp(e.target.value); setPage(1); }} className={selectCls}>
+                    {especialidades.map(e => <option key={e} value={e}>{e.length > 30 ? e.slice(0,28)+"…" : e}</option>)}
+                  </select>
+                  <select value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setPage(1); }} className={selectCls}>
+                    {["Todos","Crítico","Grave","Atenção","Normal"].map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                  {(searchQ || filterUF !== "Todos" || filterEsp !== "Todas" || filterStatus !== "Todos") && (
+                    <button onClick={() => { setSearchQ(""); setFilterUF("Todos"); setFilterEsp("Todas"); setFilterStatus("Todos"); setPage(1); }} className="flex items-center gap-1 px-2 py-2 rounded-xl bg-white/5 text-xs text-slate-400 hover:bg-white/10">
+                      <X size={12} />Limpar
+                    </button>
+                  )}
+                  <span className="text-xs text-slate-500 py-2 ml-auto">{filtered.length.toLocaleString("pt-BR")} resultados</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-white/5">
+                        <th className="text-left pb-3 pr-4 text-xs text-slate-400 font-medium">UF</th>
+                        <SortTh col="nm_local" label="Unidade" />
+                        <th className="text-left pb-3 pr-4 text-xs text-slate-400 font-medium">Especialidade</th>
+                        <SortTh col="qt_pacientes_aguardando" label="Aguardando" />
+                        <SortTh col="tempo_espera_min" label="Tempo Espera" />
+                        <th className="text-left pb-3 pr-4 text-xs text-slate-400 font-medium">Atraso</th>
+                        <th className="text-left pb-3 pr-4 text-xs text-slate-400 font-medium">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paginated.map(r => (
+                        <tr key={r.id} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
+                          <td className="py-2 pr-4 text-xs font-bold text-slate-300">{r.uf}</td>
+                          <td className="py-2 pr-4 text-xs max-w-48 truncate" title={r.nm_local}>{r.nm_local}</td>
+                          <td className="py-2 pr-4 text-xs text-slate-400 max-w-36 truncate" title={r.ds_especialidade}>{r.ds_especialidade}</td>
+                          <td className="py-2 pr-4 text-xs text-center">{r.qt_pacientes_aguardando}</td>
+                          <td className="py-2 pr-4 text-sm font-bold" style={{ color: statusColor(r.tempo_espera_min) }}>{minToHM(r.tempo_espera_min)}</td>
+                          <td className="py-2 pr-4 text-xs" style={{ color: r.atraso === "SIM" ? "#f97316" : r.atraso === "FALTA" ? "#ef4444" : "#94a3b8" }}>{r.tempo_atraso_min !== null ? minToHM(r.tempo_atraso_min) : r.atraso}</td>
+                          <td className="py-2 pr-4">
+                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusBg(r.tempo_espera_min)}`}>{statusLabel(r.tempo_espera_min)}</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {totalPages > 1 && (
+                  <div className="flex items-center justify-between mt-3">
+                    <button disabled={page <= 1} onClick={() => setPage(p => p - 1)} className="px-3 py-1.5 rounded-xl border border-white/10 text-xs disabled:opacity-30 hover:bg-white/5">← Anterior</button>
+                    <span className="text-xs text-slate-400">Pág {page} de {totalPages}</span>
+                    <button disabled={page >= totalPages} onClick={() => setPage(p => p + 1)} className="px-3 py-1.5 rounded-xl border border-white/10 text-xs disabled:opacity-30 hover:bg-white/5">Próxima →</button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ── OPERAÇÃO AO VIVO ── */}
+          {activeSection === "vivo" && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-black">Operação ao Vivo</h2>
+                  <p className="text-sm text-slate-400">Dados em tempo real · Última atualização: {lastUpdate}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setAutoRefresh(a => !a)}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl border text-sm"
+                    style={{ borderColor: autoRefresh ? "#22c55e" : "rgba(255,255,255,0.1)", color: autoRefresh ? "#22c55e" : "#94a3b8", background: autoRefresh ? "rgba(34,197,94,0.1)" : "transparent" }}>
+                    <RefreshCw size={14} className={autoRefresh ? "animate-spin" : ""} />
+                    {autoRefresh ? `Auto-refresh ${refreshInterval}s` : "Auto-refresh OFF"}
+                  </button>
+                  <button onClick={loadData} className="px-4 py-2 rounded-xl border border-white/10 text-sm hover:bg-white/5 flex items-center gap-2">
+                    <RefreshCw size={14} className={loading ? "animate-spin" : ""} />Atualizar
+                  </button>
+                </div>
+              </div>
+
+              {/* Mini KPIs vivo */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {[
+                  { label: "Críticos", value: kpis.criticos, color: "#ef4444" },
+                  { label: "Graves", value: distStatus.find(d=>d.name==="Grave")?.value ?? 0, color: "#f97316" },
+                  { label: "Atenção", value: distStatus.find(d=>d.name==="Atenção")?.value ?? 0, color: "#facc15" },
+                  { label: "Normal", value: distStatus.find(d=>d.name==="Normal")?.value ?? 0, color: "#22c55e" },
+                ].map(({ label, value, color }) => (
+                  <div key={label} className={card} style={{ borderColor: `${color}30` }}>
+                    <p className="text-xs text-slate-400">{label}</p>
+                    <p className="text-3xl font-black mt-1" style={{ color }}>{value.toLocaleString("pt-BR")}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className={card2}>
+                <div className="flex flex-wrap gap-2 mb-3">
+                  <div className="relative">
+                    <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input value={vivoSearchQ} onChange={e => setVivoSearchQ(e.target.value)} placeholder="Buscar..." className={inputCls + " pl-8 w-56"} />
+                  </div>
+                  <select value={vivoFilterUF} onChange={e => setVivoFilterUF(e.target.value)} className={selectCls}>
+                    {ufs.map(u => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                  <select value={vivoFilterStatus} onChange={e => setVivoFilterStatus(e.target.value)} className={selectCls}>
+                    {["Todos","Crítico","Grave","Atenção","Normal"].map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                  <span className="text-xs text-slate-500 py-2 ml-auto">{vivoFiltered.length} registros</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-white/5">
+                        {["UF","Unidade","Especialidade","Médico","Aguard.","Espera","Atraso","Status"].map(h => (
+                          <th key={h} className="text-left pb-3 pr-4 text-xs text-slate-400 font-medium whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {vivoFiltered.map(r => (
+                        <tr key={r.id} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
+                          <td className="py-2 pr-4 text-xs font-bold">{r.uf}</td>
+                          <td className="py-2 pr-4 text-xs max-w-40 truncate" title={r.nm_local}>{r.nm_local}</td>
+                          <td className="py-2 pr-4 text-xs text-slate-400 max-w-32 truncate">{r.ds_especialidade}</td>
+                          <td className="py-2 pr-4 text-xs text-slate-400 max-w-32 truncate">{r.nm_medico}</td>
+                          <td className="py-2 pr-4 text-xs text-center">{r.qt_pacientes_aguardando}</td>
+                          <td className="py-2 pr-4 text-sm font-black" style={{ color: statusColor(r.tempo_espera_min) }}>{minToHM(r.tempo_espera_min)}</td>
+                          <td className="py-2 pr-4 text-xs" style={{ color: r.atraso === "SIM" ? "#f97316" : r.atraso === "FALTA" ? "#ef4444" : "#64748b" }}>
+                            {r.tempo_atraso_min !== null ? minToHM(r.tempo_atraso_min) : r.atraso}
+                          </td>
+                          <td className="py-2 pr-4">
+                            <span className={`text-xs px-2 py-0.5 rounded-full ${statusBg(r.tempo_espera_min)}`}>{statusLabel(r.tempo_espera_min)}</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── RANKING ── */}
+          {activeSection === "ranking" && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-black">Ranking</h2>
+                <div className="flex gap-2">
+                  {[["local","Hospitais"],["uf","Estados"],["especialidade","Especialidades"]].map(([k,l]) => (
+                    <button key={k} onClick={() => setRankingType(k as "local"|"uf"|"especialidade")}
+                      className="px-3 py-1.5 rounded-xl text-sm"
+                      style={{ background: rankingType === k ? "#2563EB" : "rgba(255,255,255,0.04)", color: rankingType === k ? "#fff" : "#94a3b8" }}>
+                      {l}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="grid grid-cols-12 gap-3">
+                <div className={`${card2} col-span-12 lg:col-span-7`}>
+                  <h3 className="text-base font-black mb-4">Top {rankingData.length} — Maior Tempo Médio de Espera</h3>
+                  <div className="space-y-2.5">
+                    {rankingData.map((r, i) => (
+                      <div key={r.name} className="flex items-center gap-3">
+                        <span className="text-sm font-black w-6 shrink-0" style={{ color: i < 3 ? ["#FFD700","#C0C0C0","#CD7F32"][i] : "#64748b" }}>#{i+1}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between mb-1">
+                            <p className="text-xs font-medium truncate">{r.name}</p>
+                            <span className="text-sm font-black ml-2 shrink-0" style={{ color: statusColor(r.media) }}>{r.media}min</span>
+                          </div>
+                          <div className="h-1.5 rounded-full bg-white/5 overflow-hidden">
+                            <div className="h-full rounded-full" style={{ width: `${(r.media/rankingData[0].media)*100}%`, background: statusColor(r.media) }} />
+                          </div>
+                        </div>
+                        {r.critico > 0 && <span className="text-xs text-red-400 shrink-0">{r.critico} crít.</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className={`${card2} col-span-12 lg:col-span-5`}>
+                  <h3 className="text-base font-black mb-3">Distribuição</h3>
+                  <ResponsiveContainer width="100%" height={350}>
+                    <BarChart data={rankingData.slice(0,10)} layout="vertical" margin={{ left: 0, right: 20 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" horizontal={false} />
+                      <XAxis type="number" tick={{ fill: "#64748b", fontSize: 10 }} />
+                      <YAxis type="category" dataKey="name" tick={{ fill: "#94a3b8", fontSize: 9 }} width={100} tickFormatter={v => v.length > 15 ? v.slice(0,13)+"…" : v} />
+                      <Tooltip contentStyle={{ background: "#0F172A", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8 }} formatter={(v) => [`${Number(v)} min`, "Tempo Médio"]} />
+                      <Bar dataKey="media" radius={[0,4,4,0]}>
+                        {rankingData.slice(0,10).map((r) => <Cell key={r.name} fill={statusColor(r.media)} />)}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── ESPECIALIDADES ── */}
+          {activeSection === "especialidades" && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-black">Especialidades</h2>
+                <div className="relative">
+                  <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input value={espSearch} onChange={e => setEspSearch(e.target.value)} placeholder="Filtrar especialidade..." className={inputCls + " pl-8 w-64"} />
+                </div>
+              </div>
+              <div className="grid grid-cols-12 gap-3">
+                <div className={`${card2} col-span-12 lg:col-span-8`}>
+                  <ResponsiveContainer width="100%" height={350}>
+                    <BarChart data={espFiltered.slice(0,15)}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                      <XAxis dataKey="esp" tick={{ fill: "#64748b", fontSize: 9 }} tickFormatter={v => v.slice(0,12)} />
+                      <YAxis tick={{ fill: "#64748b", fontSize: 10 }} />
+                      <Tooltip contentStyle={{ background: "#0F172A", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8 }} formatter={(v) => [`${Number(v)} min`, "Tempo Médio"]} />
+                      <Bar dataKey="media" radius={[4,4,0,0]}>
+                        {espFiltered.slice(0,15).map(e => <Cell key={e.esp} fill={statusColor(e.media)} />)}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className={`${card2} col-span-12 lg:col-span-4`}>
+                  <h3 className="text-sm font-black mb-3 text-slate-400 uppercase tracking-wider">Todas ({espFiltered.length})</h3>
+                  <div className="space-y-2 overflow-auto" style={{ maxHeight: 340 }}>
+                    {espFiltered.map(e => (
+                      <div key={e.esp} className="p-2.5 rounded-xl border border-white/5 hover:border-white/10">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-xs font-medium leading-tight">{e.esp}</p>
+                          <span className="text-sm font-black shrink-0" style={{ color: statusColor(e.media) }}>{e.media}min</span>
+                        </div>
+                        <div className="flex gap-3 mt-1.5 text-xs text-slate-500">
+                          <span>{e.count.toLocaleString("pt-BR")} registros</span>
+                          {e.critico > 0 && <span className="text-red-400">{e.critico} críticos</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── ESTADOS ── */}
+          {activeSection === "estados" && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-black">Estados (UF)</h2>
+                {selectedUF && (
+                  <button onClick={() => setSelectedUF(null)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-white/10 text-sm hover:bg-white/5">
+                    <X size={12} /> Limpar seleção ({selectedUF})
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-12 gap-3">
+                <div className={`${card2} col-span-12 lg:col-span-5`}>
+                  <h3 className="text-sm font-black mb-3">Mapa — clique para filtrar</h3>
+                  <svg viewBox="0 0 580 580" className="w-full" style={{ maxHeight: 380 }}>
+                    {Object.entries(BRAZIL_PATHS).map(([uf, { path, cx, cy }]) => {
+                      const ufData = porUF.find(u => u.uf === uf);
+                      const fill = ufData ? statusColor(ufData.media) : "#1e293b";
+                      const sel = selectedUF === uf;
+                      return (
+                        <g key={uf} style={{ cursor: "pointer" }} onClick={() => setSelectedUF(selectedUF === uf ? null : uf)}>
+                          <path d={path} fill={fill} stroke={sel ? "#fff" : "#0a1a2e"} strokeWidth={sel ? 2.5 : 1.5} opacity={selectedUF && !sel ? 0.4 : 0.9} />
+                          <text x={cx} y={cy} fill="white" fontSize={9} fontWeight="bold" textAnchor="middle" dominantBaseline="middle">{uf}</text>
+                        </g>
+                      );
+                    })}
+                  </svg>
+                </div>
+                <div className={`${card2} col-span-12 lg:col-span-7`}>
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b border-white/5">
+                          {["UF","Hospitais","Registros","Tempo Médio","Crítico","Grave","Normal","Status"].map(h => (
+                            <th key={h} className="text-left pb-3 pr-3 text-xs text-slate-400 font-medium whitespace-nowrap">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(selectedUF ? porUF.filter(u => u.uf === selectedUF) : porUF).map(u => (
+                          <tr key={u.uf} className="border-b border-white/[0.03] hover:bg-white/[0.02] cursor-pointer" onClick={() => setSelectedUF(selectedUF === u.uf ? null : u.uf)}>
+                            <td className="py-2 pr-3 text-sm font-black">{u.uf}</td>
+                            <td className="py-2 pr-3 text-xs text-slate-400">{u.hospitais}</td>
+                            <td className="py-2 pr-3 text-xs">{u.count.toLocaleString("pt-BR")}</td>
+                            <td className="py-2 pr-3 text-sm font-bold" style={{ color: statusColor(u.media) }}>{u.media}min</td>
+                            <td className="py-2 pr-3 text-xs text-red-400 font-bold">{u.critico}</td>
+                            <td className="py-2 pr-3 text-xs text-orange-400">{u.grave}</td>
+                            <td className="py-2 pr-3 text-xs text-green-400">{u.normal}</td>
+                            <td className="py-2 pr-3">
+                              <span className={`text-xs px-2 py-0.5 rounded-full ${statusBg(u.media)}`}>{statusLabel(u.media)}</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {selectedUF && (
+                    <div className="mt-3 pt-3 border-t border-white/5">
+                      <h3 className="text-sm font-black mb-2">Hospitais em {selectedUF}</h3>
+                      <div className="space-y-1.5 overflow-auto" style={{ maxHeight: 200 }}>
+                        {data.filter(r => r.uf === selectedUF).sort((a,b) => b.tempo_espera_min - a.tempo_espera_min).slice(0,30).map(r => (
+                          <div key={r.id} className="flex items-center justify-between gap-2 py-1">
+                            <div className="min-w-0">
+                              <p className="text-xs truncate">{r.nm_local}</p>
+                              <p className="text-xs text-slate-500 truncate">{r.ds_especialidade}</p>
+                            </div>
+                            <span className="text-sm font-bold shrink-0" style={{ color: statusColor(r.tempo_espera_min) }}>{minToHM(r.tempo_espera_min)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── SLA & METAS ── */}
+          {activeSection === "sla" && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-black">SLA & Metas</h2>
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="text-slate-400">Meta SLA:</span>
+                  {[15,30,45,60].map(v => (
+                    <button key={v} onClick={() => setSlaThreshold(v)}
+                      className="px-3 py-1.5 rounded-xl text-sm"
+                      style={{ background: slaThreshold === v ? "#2563EB" : "rgba(255,255,255,0.04)", color: slaThreshold === v ? "#fff" : "#94a3b8" }}>
+                      {v}min
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* SLA cards */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className={`${card} col-span-1`} style={{ boxShadow: "0 16px 40px rgba(37,99,235,.12)" }}>
+                  <p className="text-sm text-slate-400 mb-2">Dentro do SLA (≤{slaThreshold}min)</p>
+                  <div className="flex items-end gap-2">
+                    <p className="text-4xl font-black text-green-400">{sla.pct}%</p>
+                    <p className="text-sm text-slate-400 mb-1">{sla.dentroSLA.toLocaleString("pt-BR")} registros</p>
+                  </div>
+                  <div className="h-2 rounded-full bg-white/5 mt-2 overflow-hidden">
+                    <div className="h-full rounded-full transition-all" style={{ width: `${sla.pct}%`, background: sla.pct >= 70 ? "#22c55e" : sla.pct >= 50 ? "#facc15" : "#ef4444" }} />
+                  </div>
+                </div>
+                <div className={card}>
+                  <p className="text-sm text-slate-400 mb-2">Fora do SLA (&gt;{slaThreshold}min)</p>
+                  <div className="flex items-end gap-2">
+                    <p className="text-4xl font-black text-red-400">{100-sla.pct}%</p>
+                    <p className="text-sm text-slate-400 mb-1">{sla.foraSLA.toLocaleString("pt-BR")} registros</p>
+                  </div>
+                </div>
+                <div className={card}>
+                  <p className="text-sm text-slate-400 mb-2">Estados acima da meta</p>
+                  <p className="text-4xl font-black text-orange-400">{sla.porUF.filter(u => u.pct < 70).length}</p>
+                  <p className="text-sm text-slate-400">{sla.porUF.filter(u => u.pct < 70).map(u => u.uf).slice(0,5).join(", ")}</p>
+                </div>
+              </div>
+
+              <div className={card2}>
+                <h3 className="text-base font-black mb-3">SLA por Estado</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-white/5">
+                        {["UF","Hospitais","Registros","Dentro SLA","Fora SLA","% SLA","Semáforo"].map(h => (
+                          <th key={h} className="text-left pb-3 pr-4 text-xs text-slate-400 font-medium">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sla.porUF.map(u => (
+                        <tr key={u.uf} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
+                          <td className="py-2 pr-4 text-sm font-black">{u.uf}</td>
+                          <td className="py-2 pr-4 text-xs text-slate-400">{u.hospitais}</td>
+                          <td className="py-2 pr-4 text-xs">{u.total.toLocaleString("pt-BR")}</td>
+                          <td className="py-2 pr-4 text-xs text-green-400 font-bold">{u.ok.toLocaleString("pt-BR")}</td>
+                          <td className="py-2 pr-4 text-xs text-red-400 font-bold">{(u.total - u.ok).toLocaleString("pt-BR")}</td>
+                          <td className="py-2 pr-4 text-sm font-black" style={{ color: u.pct >= 70 ? "#22c55e" : u.pct >= 50 ? "#facc15" : "#ef4444" }}>{u.pct}%</td>
+                          <td className="py-2 pr-4">
+                            <div className="w-20 h-1.5 rounded-full bg-white/5 overflow-hidden">
+                              <div className="h-full rounded-full" style={{ width: `${u.pct}%`, background: u.pct >= 70 ? "#22c55e" : u.pct >= 50 ? "#facc15" : "#ef4444" }} />
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── ALERTAS ── */}
+          {activeSection === "alertas" && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-black">Alertas</h2>
+                  <p className="text-sm text-slate-400">{kpis.criticos} registros críticos · {data.filter(r=>r.atraso==="SIM").length} com atraso · {data.filter(r=>r.atraso==="FALTA").length} com falta</p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                {[["critico","🔴 Críticos (>1h)"],["atraso","🟠 Com Atraso"],["falta","⚫ Falta Médica"]].map(([k,l]) => (
+                  <button key={k} onClick={() => setAlertasType(k as "critico"|"atraso"|"falta")}
+                    className="px-4 py-2 rounded-xl text-sm"
+                    style={{ background: alertasType === k ? "#2563EB" : "rgba(255,255,255,0.04)", color: alertasType === k ? "#fff" : "#94a3b8" }}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {alertas.map(r => (
+                  <div key={r.id} className="rounded-xl border p-3 hover:border-white/10 transition-colors" style={{ background: "#06111F", borderColor: `${statusColor(r.tempo_espera_min)}30` }}>
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-bold truncate">{r.nm_local}</p>
+                        <p className="text-xs text-slate-400">{r.uf} · {r.cidade}</p>
+                      </div>
+                      <span className="text-xl font-black ml-2 shrink-0" style={{ color: statusColor(r.tempo_espera_min) }}>{minToHM(r.tempo_espera_min)}</span>
+                    </div>
+                    <p className="text-xs text-slate-300 mb-1 truncate">{r.ds_especialidade}</p>
+                    <p className="text-xs text-slate-500 truncate">{r.nm_medico}</p>
+                    <div className="flex items-center justify-between mt-2 pt-2 border-t border-white/5">
+                      <span className="text-xs text-slate-400">{r.qt_pacientes_aguardando} pac. aguardando</span>
+                      {r.tempo_atraso_min !== null && <span className="text-xs" style={{ color: r.tempo_atraso_min < 0 ? "#f97316" : "#94a3b8" }}>Atraso: {minToHM(r.tempo_atraso_min)}</span>}
+                    </div>
+                    {r.status && r.status !== "OK" && <p className="text-xs mt-1 text-orange-400">{r.status}</p>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── RELATÓRIOS ── */}
+          {activeSection === "relatorios" && (
+            <div className="space-y-3">
+              <h2 className="text-xl font-black">Relatórios</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {[
+                  { title: "Todos os Registros", desc: "Export completo da tabela espera com todos os campos", action: exportCSV, icon: FileText, color: "#2563EB" },
+                  { title: "Registros Críticos", desc: "Apenas registros com tempo de espera > 60 minutos", action: () => { const prev = searchQ; setSearchQ(""); setFilterStatus("Crítico"); setTimeout(() => { exportCSV(); setFilterStatus("Todos"); setSearchQ(prev); }, 100); }, icon: AlertTriangle, color: "#ef4444" },
+                  { title: "Por Estado (UF)", desc: "Resumo agregado por UF com médias e contagens", action: () => {
+                    const rows = porUF.map(u => `"${u.uf}","${u.hospitais}","${u.count}","${u.media}","${u.critico}","${u.grave}","${u.atencao}","${u.normal}"`);
+                    const csv = `"UF","Hospitais","Registros","Tempo Médio (min)","Crítico","Grave","Atenção","Normal"\n${rows.join("\n")}`;
+                    const blob = new Blob([csv], { type: "text/csv" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url; a.download = `hapvida-por-uf.csv`; a.click(); URL.revokeObjectURL(url);
+                  }, icon: Map, color: "#22c55e" },
+                  { title: "Por Especialidade", desc: "Resumo de tempo médio e críticos por especialidade", action: () => {
+                    const rows = porEsp.map(e => `"${e.esp}","${e.count}","${e.media}","${e.critico}"`);
+                    const csv = `"Especialidade","Registros","Tempo Médio (min)","Críticos"\n${rows.join("\n")}`;
+                    const blob = new Blob([csv], { type: "text/csv" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url; a.download = `hapvida-especialidades.csv`; a.click(); URL.revokeObjectURL(url);
+                  }, icon: Stethoscope, color: "#8B5CF6" },
+                  { title: "Evolução por Hora", desc: "Tempo médio de espera agrupado por hora do dia", action: () => {
+                    const rows = porHora.map(h => `"${h.hora}","${h.media}","${h.registros}"`);
+                    const csv = `"Hora","Tempo Médio (min)","Registros"\n${rows.join("\n")}`;
+                    const blob = new Blob([csv], { type: "text/csv" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url; a.download = `hapvida-por-hora.csv`; a.click(); URL.revokeObjectURL(url);
+                  }, icon: BarChart2, color: "#F59E0B" },
+                  { title: "SLA por UF", desc: `Porcentagem de registros dentro da meta de ${slaThreshold}min por estado`, action: () => {
+                    const rows = sla.porUF.map(u => `"${u.uf}","${u.total}","${u.ok}","${u.total-u.ok}","${u.pct}%"`);
+                    const csv = `"UF","Total","Dentro SLA","Fora SLA","% SLA"\n${rows.join("\n")}`;
+                    const blob = new Blob([csv], { type: "text/csv" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url; a.download = `hapvida-sla.csv`; a.click(); URL.revokeObjectURL(url);
+                  }, icon: TrendingUp, color: "#22c55e" },
+                ].map(({ title, desc, action, icon: Icon, color }) => (
+                  <button key={title} onClick={action}
+                    className="text-left rounded-2xl border border-white/5 p-5 hover:border-white/10 hover:bg-white/[0.02] transition-all group"
+                    style={{ background: "#06111F" }}>
+                    <div className="w-11 h-11 rounded-xl flex items-center justify-center mb-3" style={{ background: `${color}20` }}>
+                      <Icon size={20} style={{ color }} />
+                    </div>
+                    <p className="text-base font-black mb-1">{title}</p>
+                    <p className="text-xs text-slate-400">{desc}</p>
+                    <div className="flex items-center gap-1.5 mt-3 text-xs" style={{ color }}>
+                      <Download size={12} />
+                      <span>Baixar CSV</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── CONFIGURAÇÕES ── */}
+          {activeSection === "configuracoes" && (
+            <div className="space-y-3 max-w-2xl">
+              <h2 className="text-xl font-black">Configurações</h2>
+              {[
+                {
+                  title: "Atualização Automática",
+                  desc: "Controla o intervalo de refresh automático dos dados",
+                  content: (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm">Auto-refresh</span>
+                        <button onClick={() => setAutoRefresh(a => !a)}
+                          className="relative w-12 h-6 rounded-full transition-colors"
+                          style={{ background: autoRefresh ? "#2563EB" : "rgba(255,255,255,0.1)" }}>
+                          <div className="absolute top-1 w-4 h-4 rounded-full bg-white transition-all" style={{ left: autoRefresh ? "calc(100% - 20px)" : 4 }} />
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm text-slate-400 w-40">Intervalo (segundos)</span>
+                        <div className="flex gap-1.5">
+                          {[30,60,120,300].map(v => (
+                            <button key={v} onClick={() => setRefreshInterval(v)}
+                              className="px-3 py-1.5 rounded-xl text-xs"
+                              style={{ background: refreshInterval === v ? "#2563EB" : "rgba(255,255,255,0.05)", color: refreshInterval === v ? "#fff" : "#94a3b8" }}>
+                              {v}s
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                },
+                {
+                  title: "Meta de SLA",
+                  desc: "Define o limiar de tempo de espera para cálculo do SLA",
+                  content: (
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-slate-400 w-40">Threshold (minutos)</span>
+                      <div className="flex gap-1.5">
+                        {[15,20,30,45,60].map(v => (
+                          <button key={v} onClick={() => setSlaThreshold(v)}
+                            className="px-3 py-1.5 rounded-xl text-xs"
+                            style={{ background: slaThreshold === v ? "#2563EB" : "rgba(255,255,255,0.05)", color: slaThreshold === v ? "#fff" : "#94a3b8" }}>
+                            {v}min
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                },
+                {
+                  title: "Notificações",
+                  desc: "Controla se o badge de alertas é exibido no menu",
+                  content: (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm">Badge de alertas no menu</span>
+                      <button onClick={() => setAlertsEnabled(a => !a)}
+                        className="relative w-12 h-6 rounded-full transition-colors"
+                        style={{ background: alertsEnabled ? "#2563EB" : "rgba(255,255,255,0.1)" }}>
+                        <div className="absolute top-1 w-4 h-4 rounded-full bg-white transition-all" style={{ left: alertsEnabled ? "calc(100% - 20px)" : 4 }} />
+                      </button>
+                    </div>
+                  )
+                },
+                {
+                  title: "Informações do Sistema",
+                  desc: "Detalhes da fonte de dados e status da conexão",
+                  content: (
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between"><span className="text-slate-400">Fonte de dados</span><span>Supabase · espera</span></div>
+                      <div className="flex justify-between"><span className="text-slate-400">Registros carregados</span><span>{data.length.toLocaleString("pt-BR")}</span></div>
+                      <div className="flex justify-between"><span className="text-slate-400">Última atualização</span><span>{lastUpdate || "—"}</span></div>
+                      <div className="flex justify-between"><span className="text-slate-400">Status da conexão</span><span className="text-green-400 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-400 inline-block" />Online</span></div>
+                      <div className="flex justify-between"><span className="text-slate-400">Estados com dados</span><span>{porUF.length} UFs</span></div>
+                      <div className="flex justify-between"><span className="text-slate-400">Especialidades</span><span>{porEsp.length}</span></div>
+                    </div>
+                  )
+                },
+              ].map(({ title, desc, content }) => (
+                <div key={title} className={card2}>
+                  <h3 className="text-base font-black mb-1">{title}</h3>
+                  <p className="text-xs text-slate-400 mb-4">{desc}</p>
+                  {content}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </main>
+    </div>
   );
 }
