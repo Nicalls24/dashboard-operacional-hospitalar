@@ -104,6 +104,7 @@ const ufData = [
   {uf:"AM",hospitais:2,agu:9,criticos:0,med:"00:21",status:"Normal"},
   {uf:"PA",hospitais:2,agu:7,criticos:0,med:"00:19",status:"Normal"},
 ];
+// Dados para SLA & Metas (regra: 15min / 75%)
 const slaData = [
   {esp:"Traumatologia",meta:75,real:71,trend:-5},
   {esp:"Oftalmologia",meta:75,real:68,trend:-12},
@@ -117,6 +118,7 @@ const slaHist = [
   {mes:"Nov",sla:41},{mes:"Dez",sla:38},{mes:"Jan",sla:43},
   {mes:"Fev",sla:40},{mes:"Mar",sla:45},{mes:"Abr",sla:42},{mes:"Mai",sla:46},
 ];
+// Dados para gráficos dos Relatórios
 const relDiario = [{h:"06h",v:55},{h:"07h",v:60},{h:"08h",v:48},{h:"09h",v:42},{h:"10h",v:38},{h:"11h",v:35},{h:"12h",v:40},{h:"13h",v:44},{h:"14h",v:46},{h:"15h",v:46}];
 const relSemanal = [{d:"Seg",v:52},{d:"Ter",v:48},{d:"Qua",v:55},{d:"Qui",v:43},{d:"Sex",v:46},{d:"Sáb",v:60},{d:"Dom",v:58}];
 const relMensal = [{s:"S1",v:48},{s:"S2",v:43},{s:"S3",v:46},{s:"S4",v:42}];
@@ -228,6 +230,7 @@ function VGeral({ac,sac,dash}:any) {
     {name:"Crítico",value:r.criticos,pct:`${Math.round(r.criticos/tot*100)}%`,color:"#ef4444"},
   ] : donutDataMock;
   const totalDonut = r?.totalRegistros || 327;
+  // ── SLA Emergência: regra 15min / 75% ──
   const slaPct = r?.slaPct ?? 68;
   const slaOk  = slaPct >= 75;
   const slaColor = slaOk ? "#22C55E" : "#EF4444";
@@ -240,7 +243,8 @@ function VGeral({ac,sac,dash}:any) {
         <KPI title="Tempo Médio"          value={r?.tempoMedioFormatado??"00:28"}   trend="5 min"    sub="vs último período" color="#F59E0B" icon={<Clock3 size={20}/>}/>
         <KPI title="Maior Espera"         value={r?.maiorEspera??"04:53"}           trend={r?.maiorEsperaUnidade??"Rio Poty"} sub={r?.maiorEsperaUF??"PI"} color="#EF4444" icon={<ShieldAlert size={20}/>}/>
         <KPI title="Hospitais Críticos"   value={String(r?.criticos??14)}           trend="3 novos"  sub="críticos"          color="#EF4444" icon={<Bell size={20}/>}/>
-        <KPI title="SLA ≤ 15 min"         value={`${slaPct}%`}                      trend={slaOk?"✓ Meta atingida":"✗ Abaixo da meta"} sub="meta: 75%" color={slaColor} icon={<ShieldAlert size={20}/>}/>
+        {/* MUDANÇA: SLA agora usa regra Emergência ≤15min / meta 75% */}
+        <KPI title="SLA Emergência ≤15min" value={`${slaPct}%`} trend={slaOk?"✓ Meta 75% atingida":"✗ Abaixo de 75%"} sub="meta: 75%" color={slaColor} icon={<ShieldAlert size={20}/>}/>
       </div>
       <div className="grid grid-cols-12 gap-3 mb-3">
         <Card className="col-span-4 relative overflow-hidden">
@@ -518,6 +522,7 @@ function VEstados() {
   );
 }
 
+// ── MUDANÇA: VSLA — mesma estrutura, nova regra 15min / 75% ──────────────────
 function VSLA({dash}:any) {
   const r = dash?.resumo;
   const slaPct  = r?.slaPct  ?? 46;
@@ -529,10 +534,10 @@ function VSLA({dash}:any) {
       <Title t="SLA & Metas" s="Tempo de Espera Emergência · SLA 15min · Meta 75%"/>
       <div className="grid grid-cols-4 gap-3 mb-3">
         {[
-          {l:"SLA Emergência ≤15min", v:`${slaPct}%`,                        m:"75%",              ok:metaOk,  c:metaOk?"#22c55e":"#ef4444"},
-          {l:"Dentro da Meta",        v:slaOk.toLocaleString("pt-BR"),        m:"pacientes ≤15min", ok:true,    c:"#22c55e"},
-          {l:"Fora da Meta",          v:slaFora.toLocaleString("pt-BR"),      m:"pacientes >15min", ok:false,   c:"#ef4444"},
-          {l:"Melhor UF",             v:"MG",                                 m:"maior SLA",        ok:true,    c:"#22c55e"},
+          {l:"SLA Emergência ≤15min", v:`${slaPct}%`,         m:"75%", ok:metaOk,         c:metaOk?"#22c55e":"#ef4444"},
+          {l:"Dentro da Meta",        v:slaOk.toLocaleString("pt-BR"), m:"pacientes ≤15min",ok:true,  c:"#22c55e"},
+          {l:"Fora da Meta",          v:slaFora.toLocaleString("pt-BR"),m:"pacientes >15min", ok:false, c:"#ef4444"},
+          {l:"Melhor UF",             v:"MG",                 m:"maior SLA",             ok:true,  c:"#22c55e"},
         ].map((k,i)=>(
           <Card key={i} className="text-center">
             <p className="text-slate-400 text-[12px] mb-2">{k.l}</p>
@@ -630,20 +635,21 @@ function VAlertas() {
   );
 }
 
+// ── MUDANÇA: VRelatorios — mesmos 6 cards, mesmo grid, botão → mini gráfico ──
 function VRelatorios() {
   const ttip = {contentStyle:{background:"#081120",border:"1px solid rgba(255,255,255,.06)",borderRadius:"8px",color:"#fff",fontSize:11}};
   const cards = [
-    {titulo:"Relatório Diário",desc:"SLA (%) por hora do dia",icon:<FileText size={24}/>,color:"#3b82f6",freq:"Diário",
+    {titulo:"Relatório Diário",    desc:"SLA (%) por hora do dia",             icon:<FileText size={24}/>,   color:"#3b82f6", freq:"Diário",
      chart:<AreaChart data={relDiario}><defs><linearGradient id="gD" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#3b82f6" stopOpacity={0.4}/><stop offset="100%" stopColor="#3b82f6" stopOpacity={0}/></linearGradient></defs><XAxis dataKey="h" tick={{fontSize:9,fill:"#64748b"}} axisLine={false} tickLine={false}/><YAxis domain={[0,100]} tick={{fontSize:9,fill:"#64748b"}} axisLine={false} tickLine={false} width={24} tickFormatter={v=>`${v}%`}/><Tooltip {...ttip}/><Area type="monotone" dataKey="v" stroke="#3b82f6" fill="url(#gD)" strokeWidth={1.5} dot={false}/></AreaChart>},
-    {titulo:"Relatório Semanal",desc:"SLA (%) por dia da semana",icon:<BarChart2 size={24}/>,color:"#8b5cf6",freq:"Semanal",
+    {titulo:"Relatório Semanal",   desc:"SLA (%) por dia da semana",           icon:<BarChart2 size={24}/>,  color:"#8b5cf6", freq:"Semanal",
      chart:<BarChart data={relSemanal}><XAxis dataKey="d" tick={{fontSize:9,fill:"#64748b"}} axisLine={false} tickLine={false}/><YAxis domain={[0,100]} tick={{fontSize:9,fill:"#64748b"}} axisLine={false} tickLine={false} width={24} tickFormatter={v=>`${v}%`}/><Tooltip {...ttip}/><Bar dataKey="v" radius={[3,3,0,0]}>{relSemanal.map((d,i)=><Cell key={i} fill={d.v>=75?"#22c55e":"#8b5cf6"}/>)}</Bar></BarChart>},
-    {titulo:"Relatório Mensal",desc:"SLA (%) por semana do mês",icon:<PieIcon size={24}/>,color:"#06b6d4",freq:"Mensal",
+    {titulo:"Relatório Mensal",    desc:"SLA (%) por semana do mês",           icon:<PieIcon size={24}/>,    color:"#06b6d4", freq:"Mensal",
      chart:<BarChart data={relMensal}><XAxis dataKey="s" tick={{fontSize:9,fill:"#64748b"}} axisLine={false} tickLine={false}/><YAxis domain={[0,100]} tick={{fontSize:9,fill:"#64748b"}} axisLine={false} tickLine={false} width={24} tickFormatter={v=>`${v}%`}/><Tooltip {...ttip}/><Bar dataKey="v" radius={[3,3,0,0]}>{relMensal.map((d,i)=><Cell key={i} fill={d.v>=75?"#22c55e":"#06b6d4"}/>)}</Bar></BarChart>},
-    {titulo:"SLA por Hospital",desc:"SLA (%) por estado — meta 75%",icon:<ShieldAlert size={24}/>,color:"#22c55e",freq:"Semanal",
+    {titulo:"SLA por Hospital",    desc:"SLA (%) por estado — meta 75%",       icon:<ShieldAlert size={24}/>,color:"#22c55e", freq:"Semanal",
      chart:<BarChart data={relSLAHosp} layout="vertical"><XAxis type="number" domain={[0,100]} tick={{fontSize:9,fill:"#64748b"}} axisLine={false} tickLine={false} tickFormatter={v=>`${v}%`}/><YAxis dataKey="n" type="category" tick={{fontSize:9,fill:"#94a3b8"}} axisLine={false} tickLine={false} width={22}/><Tooltip {...ttip}/><Bar dataKey="v" radius={[0,3,3,0]}>{relSLAHosp.map((d,i)=><Cell key={i} fill={d.v>=75?"#22c55e":"#ef4444"}/>)}</Bar></BarChart>},
-    {titulo:"Ranking de UF",desc:"Performance SLA por estado",icon:<Map size={24}/>,color:"#f59e0b",freq:"Mensal",
+    {titulo:"Ranking de UF",       desc:"Performance SLA por estado",          icon:<Map size={24}/>,        color:"#f59e0b", freq:"Mensal",
      chart:<BarChart data={relUFRank}><XAxis dataKey="n" tick={{fontSize:9,fill:"#64748b"}} axisLine={false} tickLine={false}/><YAxis domain={[0,100]} tick={{fontSize:9,fill:"#64748b"}} axisLine={false} tickLine={false} width={24} tickFormatter={v=>`${v}%`}/><Tooltip {...ttip}/><Bar dataKey="v" radius={[3,3,0,0]}>{relUFRank.map((d,i)=><Cell key={i} fill={d.v>=75?"#22c55e":"#f59e0b"}/>)}</Bar></BarChart>},
-    {titulo:"Por Especialidade",desc:"SLA (%) por área médica — meta 75%",icon:<Stethoscope size={24}/>,color:"#ef4444",freq:"Semanal",
+    {titulo:"Por Especialidade",   desc:"SLA (%) por área médica — meta 75%",  icon:<Stethoscope size={24}/>,color:"#ef4444", freq:"Semanal",
      chart:<BarChart data={relEsp}><XAxis dataKey="n" tick={{fontSize:9,fill:"#64748b"}} axisLine={false} tickLine={false}/><YAxis domain={[0,100]} tick={{fontSize:9,fill:"#64748b"}} axisLine={false} tickLine={false} width={24} tickFormatter={v=>`${v}%`}/><Tooltip {...ttip}/><Bar dataKey="v" radius={[3,3,0,0]}>{relEsp.map((d,i)=><Cell key={i} fill={d.v>=75?"#22c55e":"#ef4444"}/>)}</Bar></BarChart>},
   ];
   return (
@@ -658,6 +664,7 @@ function VRelatorios() {
             </div>
             <h3 className="text-[15px] font-bold mb-1">{r.titulo}</h3>
             <p className="text-slate-400 text-[12px] mb-3">{r.desc}</p>
+            {/* Mini gráfico no lugar do botão Exportar PDF */}
             <div className="h-[90px] w-full">
               <ResponsiveContainer width="100%" height="100%">{r.chart}</ResponsiveContainer>
             </div>
@@ -754,6 +761,7 @@ export default function Page() {
         const graves   = rows.filter((r:any)=>r.tempo_espera_min>30&&r.tempo_espera_min<=60).length;
         const atencao  = rows.filter((r:any)=>r.tempo_espera_min>15&&r.tempo_espera_min<=30).length;
         const normais  = rows.filter((r:any)=>r.tempo_espera_min<=15).length;
+        // Regra de negócio: SLA 15min / meta 75%
         const slaOk   = normais;
         const slaFora = total - slaOk;
         const slaPct  = Math.round((slaOk/total)*100);
@@ -807,12 +815,21 @@ export default function Page() {
             </button>
           ))}
         </nav>
+        <div className="mt-auto rounded-[20px] border border-white/[0.06] bg-gradient-to-br from-[#0F172A] to-[#07101D] p-4 relative overflow-hidden">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(37,99,235,.2),transparent_50%)]"/>
+          <div className="relative z-10">
+            <div className="flex items-center gap-2 mb-3"><HeartPulse size={18} className="text-[#60A5FA]"/><div><p className="text-[15px] font-black">Hapvida</p><p className="text-[11px] text-slate-400">Data Lakehouse</p></div></div>
+            <p className="text-slate-400 text-[11px] leading-relaxed">Inteligência operacional em tempo real.</p>
+            <div className="mt-4 h-9 rounded-xl bg-gradient-to-r from-[#123B8B] to-[#0B2B5C] border border-blue-400/20 flex items-center justify-center text-[#60A5FA] text-[12px] font-semibold tracking-widest">● LIVE DATA</div>
+          </div>
+        </div>
       </aside>
       <section className="flex-1 px-4 py-4 overflow-auto relative z-10">
         <header className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-4">
             <button className="w-10 h-10 rounded-xl border border-white/[0.06] bg-white/[0.03] flex items-center justify-center"><Menu size={18}/></button>
             <div className="flex items-center gap-3">
+              {/* MUDANÇA 1: título atualizado */}
               <h1 className="text-[20px] font-black tracking-tight">Central Operacional — Tempo de Espera Emergência</h1>
               <div className="w-2.5 h-2.5 rounded-full bg-green-400 shadow-[0_0_12px_rgba(74,222,128,.9)]"/>
               <span className="text-slate-400 text-[12px]">Atualizado: {ultimaAtu}</span>
